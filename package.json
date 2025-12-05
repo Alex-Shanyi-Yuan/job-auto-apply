@@ -1,0 +1,15 @@
+{
+    "name": "autocareer-monorepo",
+    "version": "1.0.0",
+    "private": true,
+    "scripts": {
+        "dev": "concurrently \"npm run dev:web\" \"npm run dev:api\"",
+        "dev:web": "cd frontend && npm run dev",
+        "dev:api": "cd backend/services/resume-tailor && python main.py",
+        "build": "cd frontend && npm run build",
+        "deploy": "npx sst deploy"
+    },
+    "devDependencies": {
+        "concurrently": "^8.2.2"
+    }
+}

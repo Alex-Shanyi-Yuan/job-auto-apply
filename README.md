@@ -6,162 +6,148 @@
 
 ### Core Value Proposition
 
-- **High-Signal Sourcing**: Only surfacing jobs that meet strict salary/tier criteria.
-- **Intelligent Filtering**: Using LLMs to discard jobs where the user is under/over-qualified.
-- **Hyper-Personalization**: Rewriting resumes for every single application.
-- **Application Tracking**: Centralized dashboard for all applied roles.
+* **High-Signal Sourcing:** Only surfacing jobs that meet strict salary/tier criteria
+* **Intelligent Filtering:** Using LLMs to discard jobs where the user is under/over-qualified
+* **Hyper-Personalization:** Rewriting resumes for every single application
+* **Application Tracking:** Centralized dashboard for all applied roles
 
----
+## 2. System Architecture (Hybrid: Next.js + Python Serverless)
 
-## 2. System Architecture (AWS Serverless)
+We will use a **Hybrid Architecture** where Next.js acts as the orchestrator and Python Lambdas act as specialized workers.
 
-The system will use an **Event-Driven Serverless Architecture** to minimize idle costs and scale infinitely.
+### The "Orchestrator" (Frontend & API)
 
-### High-Level Components
+**Framework:** Next.js 14+ (App Router)  
+**Hosting:** Vercel or AWS Amplify
 
-- **Frontend**: React (Next.js) hosted on AWS Amplify or Vercel.
-- **API Layer**: Amazon API Gateway (REST/HTTP).
-- **Compute**: AWS Lambda (Node.js or Python) for all business logic.
-- **Database**:
-  - **Amazon DynamoDB**: For high-speed job tracking (deduplication) and application state.
-  - *(Optional)* **Amazon Aurora Serverless (PostgreSQL)**: If complex relational queries for user analytics are needed.
-- **Storage**: Amazon S3 (storing original and generated resumes).
-- **AI/ML**: AWS Bedrock (access to Claude 3.5 Sonnet) or OpenAI API (GPT-4o).
-- **Queues**: Amazon SQS (Simple Queue Service) to decouple scraping, filtering, and writing tasks.
-- **Auth**: Amazon Cognito (User management) or Clerk.
-- **Payments**: Stripe.
+**Responsibility:**
+* User Authentication (Auth.js / Clerk)
+* Database Operations (CRUD on Users/Jobs)
+* Stripe Payments
+* Orchestration: Deciding when to call the Python workers
 
----
+### The "Workers" (Compute Layer)
+
+**Runtime:** AWS Lambda (Python 3.11)
+
+**Responsibility:**
+* **Resume Parser:** Extracting text from PDFs
+* **The Tailor:** Running heavy LLM prompts (LangChain/OpenAI)
+* **PDF Compiler:** Running `pdflatex` to generate final assets
 
 ## 3. Detailed Module Specifications
 
-### Module A: Job Ingestion & Sourcing Engine
+### Module A: Job Ingestion & Sourcing Engine (Next.js Cron)
 
-**Goal**: Fetch high-paying jobs from various sources.
+**Runtime:** Next.js API Route (Cron Job) or simple Lambda
 
-**Data Sources**:
-- **Aggregator APIs**: Integrate with Theirstack, Jooble, or RapidAPI (JSearch). These are more reliable than raw scraping.
-- **Scraping (Fallback)**: Use Apify actors or Browse.ai to scrape specific high-value career pages (e.g., "FAANG" career sites) if APIs miss them.
+**Data Sources:**
+* Aggregator APIs: Integrate with Theirstack or JSearch
 
-**Filtering (Level 1 - Raw Data)**:
-- Filter by Salary (e.g., >$150k), Location (Remote/US), and Title Keywords.
+**Process:**
+1. Fetch jobs from API (TypeScript)
+2. Check DynamoDB for duplicates
+3. Save new jobs to DB
 
-**Deduplication Logic**:
-- Before processing, check DynamoDB `JobHistory` table.
-- **Key**: `Hash(Company + JobTitle + Location_Snippet)`.
-- If exists -> Skip.
+**Note:** TypeScript is perfect here because it's just JSON shuffling.
 
-### Module B: The Intelligent Filter (LLM Evaluator)
+### Module B: The Intelligent Filter (Python Lambda)
 
-**Goal**: Remove jobs that don't match the user's actual experience level.
+**Runtime:** Python Lambda
 
-**Trigger**: New job passes Level 1 filter.
+**Why Python?** Complex text analysis and "fuzzy matching" are easier with Python libraries.
 
-**Process**:
-1. Fetch User Profile (Text dump of experience + preferences).
-2. Fetch Job Description (JD).
-3. **LLM Prompt**: 
-   > "Act as a recruiter. Compare this Candidate Profile to this JD. Output JSON: `{ "match_score": 0-100, "reason": "...", "experience_gap": boolean }`. If `experience_gap` is True (e.g., Job requires 10 years, user has 2), reject."
+**Trigger:** EventBridge event when new jobs are added  
+**Input:** User Profile JSON + Job Description Text  
+**Output:** `{ "match_score": 85, "reason": "..." }`
 
-**Outcome**: Only high-probability jobs move to the next stage.
+### Module C: Resume Tailoring Engine (Python Lambda)
 
-### Module C: Resume Tailoring Engine
+**Runtime:** Python Lambda (Container Image)
 
-**Goal**: Rewrite the user's resume for the specific job.
+**Why Container?** We need to bundle a full LaTeX distribution (approx 500MB), which is too large for a standard Lambda zip.
 
-**Process**:
-1. **Input**: Master Resume (JSON/Markdown format) + Target Job Description.
-2. **LLM Task**:
-   - Re-order bullet points to prioritize relevant skills.
-   - Rewrite the "Summary" section to mirror JD keywords.
-   - Generate a specific Cover Letter.
-3. **Output**: Generate a PDF (using Puppeteer on Lambda or a library like `pdf-lib`) and save to S3.
+**Process:**
+1. **Input:** Master Resume (LaTeX) + Job Description
+2. **LLM Task:** Rewrite specific LaTeX sections
+3. **Compilation:** Run `pdflatex` subprocess to build PDF
+4. **Storage:** Upload result to S3
+5. **Response:** Return the S3 Signed URL to Next.js
 
-### Module D: The Application Agent (The "Auto-Apply" Solution)
+### Module D: The Application Agent (Browser Extension)
 
-**Challenge**: Fully autonomous bots often fail CAPTCHAs (Cloudflare Turnstile, reCAPTCHA) and complex multi-step forms (Workday).
+**Runtime:** Client-Side JavaScript (Plasmo Framework)
 
-**Strategy: Hybrid Approach**
-
-- **Tier 1 (Easy Apply / Email)**: If the job allows email application or has a simple API-accessible form, the Lambda function sends the application directly.
-- **Tier 2 (Assisted Apply - Recommended)**:
-  - The system generates an "Application Packet" (Tailored Resume, Cover Letter, Answers to "Why us?").
-  - **Chrome Extension**: The user installs a browser extension. When they open the job link, the extension auto-fills the inputs using the data generated by the backend. This bypasses CAPTCHA issues because a human is "driving."
-
----
+**Process:**
+1. User clicks "Apply" on a job board (e.g., Workday)
+2. Extension fetches the tailored resume data from Next.js API
+3. Extension auto-fills the DOM elements on the page
 
 ## 4. Data Model (DynamoDB Schema Design)
 
 ### Table 1: Users
-- **PK**: `USER#{userId}`
-- **Attributes**: `email`, `stripe_customer_id`, `subscription_status`, `credits_remaining`, `master_resume_s3_url`
 
-### Table 2: Jobs (Global Job Cache to save API costs)
-- **PK**: `JOB#{jobHash}`
-- **Attributes**: `company`, `title`, `salary_min`, `salary_max`, `raw_description`, `source_url`, `date_found`
+* **PK:** `USER#{userId}`
+* **Attributes:** `email`, `stripe_customer_id`, `credits_remaining`, `master_resume_s3_key`
 
-### Table 3: Applications (The Tracker)
-- **PK**: `USER#{userId}`
-- **SK**: `APP#{jobHash}` (Allows querying all apps for a user)
-- **GSI1 (Global Secondary Index)**: `STATUS#{status}` (To query "To Apply", "Applied", "Rejected")
-- **Attributes**:
-  - `status`: (`PENDING_REVIEW`, `TAILORING`, `READY_TO_APPLY`, `APPLIED`)
-  - `tailored_resume_s3_url`: Link to the specific PDF.
-  - `generated_cover_letter`: Text.
-  - `match_score`: 85 (from Module B).
-  - `job_metadata`: Snapshot of the JD for interview prep.
+### Table 2: Applications
 
----
+* **PK:** `USER#{userId}`
+* **SK:** `APP#{jobHash}`
+* **Attributes:**
+  * `status`: (PENDING, TAILORING, READY, APPLIED)
+  * `tailored_resume_url`: (S3 Link)
+  * `match_score`: (Number)
 
-## 5. Billing Strategy (Stripe)
+## 5. Interface Contract (TypeScript <-> Python)
 
-We will use a **Hybrid Pricing Model** to cover the high cost of LLM tokens and Scraping APIs.
+To prevent errors, we define **Shared Interfaces** in TypeScript that match the Python output.
 
-### Base Subscription (SaaS)
-- **$29/month**.
-- Includes access to the platform and daily job scanning.
-- Includes storage of data.
+**TypeScript Interface:**
 
-### Usage-Based "Application Credits"
-- Each tailored application (LLM generation + PDF build) costs **1 Credit**.
-- Users get 10 credits/month free.
-- Users buy "Credit Packs" (e.g., 50 credits for $20).
-- **Why?** Prevents users from spam-applying and burning your API costs.
+```typescript
+interface TailorResponse {
+  jobId: string;
+  s3Url: string; // The result PDF
+  generatedCoverLetter: string;
+  tokenUsage: number;
+}
+```
 
-### Stripe Integration
-- Use **Stripe Checkout** for buying credits.
-- Use **Stripe Billing** for the monthly subscription.
-- Webhooks (`invoice.paid`) trigger credit updates in DynamoDB.
+**Next.js Call (Example):**
 
----
+```typescript
+// Next.js Server Action
+async function generateApplication(jobId: string) {
+  const result = await fetch(process.env.PYTHON_LAMBDA_URL, {
+    method: 'POST',
+    body: JSON.stringify({ jobId, userId: currentUser.id })
+  });
+  return result.json() as TailorResponse;
+}
+```
 
 ## 6. Development Phases
 
-### Phase 1: MVP (Manual Apply, Auto-Tailor)
-- **Sourcing**: Connect 1 Job API (e.g., JSearch or Theirstack).
-- **Filtering**: Implement the LLM Matcher.
-- **Tailoring**: User clicks "Generate Application" -> System creates PDF.
-- **Tracking**: User manually marks "Applied" in the dashboard.
-- **Status**: The user downloads the PDF and applies themselves.
+### Phase 1: Local Hybrid Dev
 
-### Phase 2: Assisted Automation
-- **Chrome Extension**: Build a plugin that fetches the Application data from your API and fills fields on Greenhouse/Lever/Workday.
-- **Email Automation**: Auto-send emails for jobs that accept them.
+* **Backend:** Run the Python script (`main.py`) locally on port 8000 (FastAPI or simple script)
+* **Frontend:** Run Next.js on port 3000
+* **Connection:** Next.js proxies requests to `localhost:8000`
 
-### Phase 3: Full Automation & Scale
-- **Headless Browsers**: Attempt full automation on simple sites using Puppeteer/Playwright.
-- **Interview Prep**: Use the stored JD to generate mock interview questions via LLM.
+### Phase 2: Cloud Deployment
 
----
+* **Backend:** Deploy Python code to AWS Lambda (using SST or Serverless Framework)
+* **Frontend:** Deploy Next.js to Vercel/Amplify
+* **Connection:** Next.js calls the private Lambda Function URL
 
 ## 7. Recommended Tech Stack Summary
 
 | Component | Technology | Reasoning |
-| :--- | :--- | :--- |
-| **Framework** | SST (Serverless Stack) or Serverless Framework | Best DX for defining AWS infra as code (IaC). |
-| **Language** | TypeScript | Shared types between Frontend and Backend. |
-| **Frontend** | Next.js (React) | SSR, SEO friendly, easy API integration. |
-| **Job API** | Theirstack | Excellent "Tech Stack" filtering (good for tech jobs). |
-| **LLM** | OpenAI GPT-4o-mini | Cheap, fast, excellent reasoning for resumes. |
-| **PDF Gen** | React-PDF (Render) or PDFKit | Generate professional PDFs programmatically. |
-| **Browser Auto** | Plasmo | Framework for building browser extensions (if going Phase 2). |
+|-----------|-----------|-----------|
+| Orchestrator | Next.js (App Router) | Best-in-class for UI, Auth, and simple API routes |
+| Worker Runtime | AWS Lambda (Python) | Access to powerful AI/NLP libraries and LaTeX tools |
+| Infrastructure | SST (Ion) | Define both Next.js and Python Lambdas in one `sst.config.ts` |
+| Database | DynamoDB | Single-digit millisecond latency for job tracking |
+| LLM | OpenAI GPT-4o | Via `openai` Python SDK |
+| PDF Engine | LaTeX (TeX Live) | Bundled in a Docker container for Lambda |

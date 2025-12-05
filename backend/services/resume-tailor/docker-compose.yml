@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  tailor:
+    build: .
+    container_name: resume-tailor
+    volumes:
+      - ./data:/app/data
+      - ./output:/app/output
+    env_file:
+      - .env
+    stdin_open: true
+    tty: true
