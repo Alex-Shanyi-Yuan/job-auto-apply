@@ -1,51 +1,300 @@
-\documentclass[11pt,a4paper]{article}
-\usepackage[utf8]{inputenc}
-\usepackage[margin=1in]{geometry}
+%-------------------------
+% Resume in Latex
+% Author : Jake Gutierrez
+% Based off of: https://github.com/sb2nov/resume
+% License : MIT
+%------------------------
+
+\documentclass[letterpaper,11pt]{article}
+
+\usepackage{latexsym}
+\usepackage[empty]{fullpage}
+\usepackage{titlesec}
+\usepackage{marvosym}
+\usepackage[usenames,dvipsnames]{color}
+\usepackage{verbatim}
 \usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\usepackage{fancyhdr}
+\usepackage[english]{babel}
+\usepackage{tabularx}
+\input{glyphtounicode}
+
+\pagestyle{fancy}
+\fancyhf{} 
+\fancyfoot{}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+% Adjust margins
+\addtolength{\oddsidemargin}{-0.5in}
+\addtolength{\evensidemargin}{-0.5in}
+\addtolength{\textwidth}{1in}
+\addtolength{\topmargin}{-.5in}
+\addtolength{\textheight}{1.0in}
+
+\urlstyle{same}
+
+\raggedbottom
+\raggedright
+\setlength{\tabcolsep}{0in}
+
+% Sections formatting
+\titleformat{\section}{
+  \vspace{-4pt}\scshape\raggedright\large
+}{}{0em}{}[\color{black}\titlerule \vspace{-5pt}]
+
+% Ensure that generate pdf is machine readable/ATS parsable
+\pdfgentounicode=1
+
+%-------------------------
+% Custom commands
+\newcommand{\resumeItem}[1]{
+  \item\small{
+    {#1 \vspace{-2pt}}
+  }
+}
+
+\newcommand{\resumeSubheading}[4]{
+  \vspace{-2pt}\item
+    \begin{tabular*}{0.97\textwidth}[t]{l@{\extracolsep{\fill}}r}
+      \textbf{#1} & #2 \\
+      \textit{\small#3} & \textit{\small #4} \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeSubSubheading}[2]{
+    \item
+    \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
+      \textit{\small#1} & \textit{\small #2} \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeProjectHeading}[2]{
+    \item
+    \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
+      \small#1 & #2 \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeSubItem}[1]{\resumeItem{#1}\vspace{-4pt}}
+
+% RESTORED: This command forces bullets instead of dashes for level 2 items
+\renewcommand\labelitemii{$\vcenter{\hbox{\tiny$\bullet$}}$}
+
+\newcommand{\resumeSubHeadingListStart}{\begin{itemize}[leftmargin=0.15in, label={}]}
+\newcommand{\resumeSubHeadingListEnd}{\end{itemize}}
+\newcommand{\resumeItemListStart}{\begin{itemize}}
+\newcommand{\resumeItemListEnd}{\end{itemize}\vspace{-5pt}}
+
+%-------------------------------------------
+%%%%%%  RESUME STARTS HERE  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 
 \begin{document}
 
-\section*{John Doe}
-\noindent
-Email: john.doe@example.com | Phone: (555) 123-4567 | LinkedIn: linkedin.com/in/johndoe
+%----------HEADING----------
+\begin{center}
+    \textbf{\Huge \scshape Alex Yuan} \\ 
+    \small +1 647-573-0588 $|$ \href{mailto:alexsy.yuan@mail.utoronto.ca}{\underline{alexsy.yuan@mail.utoronto.ca}} $|$ 
+    \href{https://www.linkedin.com/in/alex-shanyi-yuan/}{\underline{linkedin.com/in/alex-shanyi-yuan/}} $|$
+    \href{https://github.com/Alex-Shanyi-Yuan}{\underline{github.com/Alex-Shanyi-Yuan}} \\
+    \textbf{Citizenship: Canada (TN visa eligible for U.S. employment)} \\
+\end{center}
 
-\section*{Summary}
-% <TAILOR_SUMMARY>
-Experienced software engineer with 5+ years of expertise in full-stack development, 
-cloud architecture, and team leadership. Passionate about building scalable systems.
-% </TAILOR_SUMMARY>
 
-\section*{Skills}
-% <TAILOR_SKILLS>
-Python, JavaScript, TypeScript, React, Node.js, AWS, Docker, Kubernetes, PostgreSQL, MongoDB
-% </TAILOR_SKILLS>
+%-----------EDUCATION-----------
+\section{Education}
+  \resumeSubHeadingListStart
+    \resumeSubheading
+      {University of Toronto}{Toronto, ON}
+      {Bachelor of Applied Science in Computer Engineering}{Sept. 2021 -- May 2026}
+      \resumeItemListStart
+        \resumeItem{Minor in \textbf{Artificial Intelligence} \& Business (GPA: 3.75/4.0)}
+      \resumeItemListEnd
+  \resumeSubHeadingListEnd
 
-\section*{Experience}
+%-----------TECHNICAL SKILLS-----------
+\section{Technical Skills}
+ \begin{itemize}[leftmargin=0.15in, label={}]
+    \small{\item{
+     \textbf{Languages:}{ Java, Python, C/C++, Golang, JavaScript, TypeScript, SQL, Verilog, Ruby} \\
+     \textbf{Frameworks:}{ React, Next.js, Vue, PyTorch, TensorFlow, Spring Boot, FastAPI, Three.js} \\
+     \textbf{Infrastructure:}{ Docker, Kubernetes, AWS, Jenkins, Kafka, RabbitMQ, GitHub Actions} \\
+     \textbf{Concepts:}{ Distributed Systems, Microservices, REST/gRPC, CI/CD, OOP, Agile, System Design}
+    }}
+ \end{itemize}
 
-\textbf{Senior Software Engineer} | Tech Company A | 2020 - Present
+%-----------SUMMARY (OPTIONAL - UNCOMMENT IF REQUIRED)-----------
+% \section{Summary}
+% Software Engineer with hands-on experience in frontend development using React and TypeScript. Delivered scalable, efficient user
+% interfaces by transforming complex data into intuitive visualizations and workflows. Demonstrated ability to leverage modern AI tools
+% and CI/CD practices to accelerate development, while collaborating with cross-functional teams to execute a clear product vision.
 
-\begin{itemize}[leftmargin=*]
-% <TAILOR_EXPERIENCE_1>
-\item Built a scalable microservices architecture serving 1M+ users
-\item Reduced API latency by 50\% through optimization and caching strategies
-\item Led a team of 4 engineers in developing new product features
-\item Implemented CI/CD pipelines reducing deployment time by 70\%
-% </TAILOR_EXPERIENCE_1>
-\end{itemize}
+%-----------EXPERIENCE-----------
+\section{Experience}
+  \resumeSubHeadingListStart
 
-\textbf{Software Engineer} | Tech Company B | 2018 - 2020
+    % --- AMD ---
+    \item
+    \begin{tabular*}{0.97\textwidth}[t]{l@{\extracolsep{\fill}}r}
+      \textbf{AMD} & Toronto, ON \\
+    \end{tabular*}\vspace{-7pt}
+    
+    \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
+      \textit{\small Software Engineer (Contract)} & \textit{\small May 2025 -- Aug 2025} \\
+    \end{tabular*}\vspace{-7pt}
 
-\begin{itemize}[leftmargin=*]
-% <TAILOR_EXPERIENCE_2>
-\item Developed RESTful APIs used by mobile and web applications
-\item Migrated legacy monolith to modern containerized architecture
-\item Improved test coverage from 40\% to 85\%
-\item Collaborated with product managers to define technical requirements
-% </TAILOR_EXPERIENCE_2>
-\end{itemize}
+    \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
+      \textit{\small Software Engineer Intern (PEY)} & \textit{\small May 2024 -- May 2025} \\
+    \end{tabular*}\vspace{-5pt}
+    
+    \resumeItemListStart
+        \resumeItem{Retained as a contractor following a high-performance 12-month internship to lead critical frontend infrastructure projects.}
+        \resumeItem{Architected a regression management platform serving \textbf{2,000+ engineers}, utilizing \textbf{Vue} and \textbf{PostgreSQL} to visualize testing bottlenecks and improve silicon validation efficiency.}
+        \resumeItem{Engineered an AI-driven debugging pipeline that reduced validation time by autonomously identifying edge cases.}
+        \resumeItem{Implemented \textbf{JWT} authentication across Python and JavaScript services, reducing unauthorized access incidents by 90\%.}
+        \resumeItem{Designed and deployed a \textbf{CI/CD pipeline} using \textbf{Jenkins}, reducing deployment latency by 30\%.}
+        \resumeItem{Developed CLI automation tools in \textbf{Python} and \textbf{Ruby (OOP)}, saving 20+ hours per week of manual engineering effort.}
+    \resumeItemListEnd
 
-\section*{Education}
+    % --- Accelbyte ---
+    \resumeSubheading
+      {Accelbyte Inc.}{Jan 2023 -- Aug 2023}
+      {Software Engineer Intern}{Toronto, ON}
+      \resumeItemListStart
+        \resumeItem{Engineered scalable \textbf{Golang microservices} utilizing \textbf{gRPC} for low-latency inter-service communication.}
+        \resumeItem{Refactored global authentication middleware in \textbf{Golang}, enabling seamless cross-service sessions.}
+        \resumeItem{Maintained high-availability \textbf{Java REST APIs} for partner integrations, ensuring 99.9\% system uptime.}
+        \resumeItem{Automated release workflows in \textbf{Jenkins}, reducing manual release overhead by 2 hours per cycle.}
+    \resumeItemListEnd
 
-\textbf{Bachelor of Science in Computer Science} | University Name | 2018
+    % --- U of T ---
+    \resumeSubheading
+      {University of Toronto}{May 2023 -- Aug 2023}
+      {Silicon Design Engineer Intern}{Toronto, ON}
+      \resumeItemListStart
+        \resumeItem{Optimized FPGA-Python communication pipelines using \textbf{Verilog} and Vivado, reducing data transfer latency by 80\%.}
+        \resumeItem{Implemented \textbf{I2C} and \textbf{SPI} protocols to enhance data throughput by 50\% in hardware simulations.}
+    \resumeItemListEnd
 
+    % --- F8th ---
+    \resumeSubheading
+      {F8th Inc.}{May 2022 -- Aug 2022}
+      {Machine Learning Engineer Intern}{Toronto, ON}
+      \resumeItemListStart
+        \resumeItem{Built an \textbf{active learning model} in \textbf{Python}, \textbf{Scikit-learn}, and \textbf{TensorFlow}, achieving 98\% accuracy.}
+        \resumeItem{Designed automated \textbf{ETL pipelines} using \textbf{MySQL} to accelerate model retraining and feature extraction.}
+    \resumeItemListEnd
+
+    % --- National Bank (Commented out - Use for Fintech/Analyst roles) ---
+    \resumeSubheading
+       {National Bank of Canada}{Oct 2019 -- Jan 2020}
+       {Junior Analyst Intern}{Toronto, ON}
+       \resumeItemListStart
+         \resumeItem{Processed high-volume client trading instructions with 100\% accuracy, ensuring regulatory compliance.}
+         \resumeItem{Audited senior analyst instructions to mitigate financial risk, identifying key data discrepancies.}
+         \resumeItem{Collaborated with cross-functional teams to streamline request handling and improve operational efficiency.}
+    \resumeItemListEnd
+      
+  \resumeSubHeadingListEnd
+
+
+%-----------PROJECTS-----------
+\section{Projects}
+    \resumeSubHeadingListStart
+
+    \resumeProjectHeading
+      {\textbf{AI Outfit Simulator} $|$ \emph{Next.js, Python, Gemini AI, Three.js, Stable Diffusion}}{}
+      \resumeItemListStart
+        \resumeItem{Developed a virtual try-on platform that simulates clothing on 3D human models using \textbf{Diffusion Models} and \textbf{Three.js}.}
+        \resumeItem{Implemented semantic search using \textbf{CLIP embeddings} to retrieve visually similar items from user wardrobes.}
+        \resumeItem{Integrated \textbf{Gemini AI} to analyze user feedback loops, fine-tuning prompt templates for adaptive style personalization.}
+      \resumeItemListEnd
+
+    \resumeProjectHeading
+      {\textbf{Obsidian AI Note Plugin} $|$ \emph{TypeScript, Google Gemini API, Obsidian}}{}
+      \resumeItemListStart
+        \resumeItem{Engineered a multi-modal plugin processing audio and PDFs via asynchronous \textbf{Gemini API} polling.}
+        \resumeItem{Designed robust error handling with graceful degradation to manage large file uploads (up to 2GB).}
+        \resumeItem{Implemented an intelligent summarization engine that converts unstructured audio transcripts into structured, analytical notes.}
+      \resumeItemListEnd
+  
+    \resumeProjectHeading
+      {\textbf{Interactive Networking Lab} $|$ \emph{Next.js, Docker, Python, C, Systems Programming}}{}
+      \resumeItemListStart
+        \resumeItem{Built an educational platform allowing users to compile \textbf{C} code and visualize network packet transmission in real-time.}
+        \resumeItem{Orchestrated isolated lab environments using \textbf{Docker Swarm} to ensure secure and reproducible grading simulations.}
+        \resumeItem{Developed backend verification scripts in \textbf{Python} to validate custom network protocols.}
+      \resumeItemListEnd
+    
+    \resumeProjectHeading
+      {\textbf{Pedestrian Detection System} $|$ \emph{Python, PyTorch, Computer Vision}}{}
+      \resumeItemListStart
+        \resumeItem{Trained a \textbf{Mask R-CNN (ResNet-50)} model in \textbf{PyTorch} for real-time pedestrian detection.}
+        \resumeItem{Optimized model performance via data augmentation techniques, achieving 93.3\% detection accuracy.}
+      \resumeItemListEnd
+    
+    \resumeProjectHeading
+      {\textbf{NLP Tech News Aggregator} $|$ \emph{Python, OpenAI API, Automation}}{}
+      \resumeItemListStart
+        \resumeItem{Engineered an automated news summarization pipeline using \textbf{Python} and \textbf{GPT models}, achieving 95\% test coverage.}
+        \resumeItem{Implemented automated email delivery services to distribute concise technical summaries to subscribers.}
+      \resumeItemListEnd
+    
+    \resumeProjectHeading
+      {\textbf{Network Communication Systems} $|$ \emph{C, TCP/UDP, Socket Programming}}{}
+      \resumeItemListStart
+        \resumeItem{Implemented a robust file transfer system using \textbf{UDP} and a multi-user chat server using \textbf{TCP} in \textbf{C}.}
+        \resumeItem{Handled concurrency and packet loss scenarios manually to ensure data integrity across unstable networks.}
+      \resumeItemListEnd
+    
+    \resumeProjectHeading
+      {\textbf{High-Performance GIS Engine} $|$ \emph{C++, Algorithms, Multithreading}}{}
+      \resumeItemListStart
+        \resumeItem{Architected a GIS pathfinding engine in \textbf{C++} utilizing \textbf{A* algorithms} and OpenStreetMap data.}
+        \resumeItem{Optimized query performance by 40\% through \textbf{multithreading} and efficient data structure design.}
+      \resumeItemListEnd
+    
+    \resumeProjectHeading
+      {\textbf{Full Stack Social Platform} $|$ \emph{React, Node.js, MongoDB, JWT}}{}
+      \resumeItemListStart
+        \resumeItem{Developed a secure social media application featuring \textbf{RESTful APIs} and \textbf{JWT-based authentication}.}
+        \resumeItem{Designed a scalable database schema in \textbf{MongoDB} to handle complex user relationships and content feeds.}
+      \resumeItemListEnd
+    
+    \resumeProjectHeading
+      {\textbf{Blockchain Transaction Prototype} $|$ \emph{Rust, Solidity, Distributed Systems}}{}
+      \resumeItemListStart
+        \resumeItem{Developed a high-throughput blockchain prototype in \textbf{Rust}, implementing core consensus mechanisms.}
+        \resumeItem{Wrote \textbf{Solidity} smart contracts to handle secure transaction logic and automated verification.}
+      \resumeItemListEnd
+    
+    \resumeProjectHeading
+      {\textbf{LLVM Compiler Contribution} $|$ \emph{C++, Compiler Design, Open Source}}{}
+      \resumeItemListStart
+        \resumeItem{Contributed to the \textbf{LLVM} codebase by refactoring compiler optimization passes for modern \textbf{C++} compliance.}
+        \resumeItem{Improved code maintainability and performance of specific backend instruction generation modules.}
+      \resumeItemListEnd
+    
+    \resumeProjectHeading
+      {\textbf{CNN Handwriting Recognition} $|$ \emph{Python, TensorFlow, FastAPI}}{}
+      \resumeItemListStart
+        \resumeItem{Trained a \textbf{CNN} model on the Kuzushiji-MNIST dataset to recognize ancient Japanese characters.}
+        \resumeItem{Deployed the model via a high-performance \textbf{FastAPI} backend for real-time inference.}
+      \resumeItemListEnd
+    
+    \resumeProjectHeading
+      {\textbf{Personal Portfolio Infrastructure} $|$ \emph{React, CI/CD, Cloud Hosting}}{}
+      \resumeItemListStart
+        \resumeItem{Built a responsive portfolio with \textbf{React}, implementing CI/CD pipelines for automated deployment on \textbf{Netlify}.}
+      \resumeItemListEnd
+    
+    \resumeProjectHeading
+      {\textbf{Geometry Wars Game Engine} $|$ \emph{Java, JavaFX, OOP, Physics Engine}}{}
+      \resumeItemListStart
+        \resumeItem{Developed a physics-based game engine in \textbf{Java}, implementing collision detection and object pooling patterns.}
+      \resumeItemListEnd
+      
+    \resumeSubHeadingListEnd
 \end{document}

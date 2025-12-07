@@ -4,6 +4,13 @@
 # Environment variables
 .env
 
+# meta data files
+job_description.txt
+
+# resume pdf files
+Resume_*.pdf
+tailored_resume.tex
+
 # Python
 __pycache__/
 *.py[cod]

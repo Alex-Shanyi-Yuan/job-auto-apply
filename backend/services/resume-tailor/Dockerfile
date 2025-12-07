@@ -27,6 +27,9 @@ RUN mkdir -p output data
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 
-# Default command
-CMD ["python", "main.py", "--help"]
+# Set entrypoint to python main.py so arguments are appended
+ENTRYPOINT ["python", "main.py"]
+
+# Default arguments if none provided
+CMD ["--help"]
 

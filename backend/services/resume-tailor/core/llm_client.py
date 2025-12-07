@@ -4,7 +4,8 @@ Uses Google Gemini Pro to tailor LaTeX resumes to job descriptions.
 """
 
 import os
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from typing import Optional
 import time
 
@@ -30,8 +31,8 @@ class GeminiTailorClient:
                 "Set it in .env file or pass as parameter."
             )
         
-        genai.configure(api_key=self.api_key)
-        self.model = genai.GenerativeModel('gemini-1.5-pro')
+        self.client = genai.Client(api_key=self.api_key)
+        self.model_name = 'gemini-2.5-flash' # only working one for now, other other ones cant use for free
     
     def create_prompt(self, master_latex: str, job_description: str) -> str:
         """
@@ -79,7 +80,7 @@ Return the complete tailored LaTeX resume below:"""
         self,
         master_latex: str,
         job_description: str,
-        max_retries: int = 3
+        max_retries: int = 1
     ) -> str:
         """
         Send resume and job description to Gemini for tailoring.
@@ -100,9 +101,10 @@ Return the complete tailored LaTeX resume below:"""
         for attempt in range(max_retries):
             try:
                 # Generate content with Gemini
-                response = self.model.generate_content(
-                    prompt,
-                    generation_config=genai.types.GenerationConfig(
+                response = self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
                         temperature=0.7,
                         top_p=0.95,
                         top_k=40,

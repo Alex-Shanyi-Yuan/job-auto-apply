@@ -1,7 +1,7 @@
 # Core dependencies for Resume Tailor CLI
 requests>=2.31.0
 beautifulsoup4>=4.12.0
-google-generativeai>=0.3.0
+google-genai
 python-dotenv>=1.0.0
 
 # Optional: Keep these for future web service integration
