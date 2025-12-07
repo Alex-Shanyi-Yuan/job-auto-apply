@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 # Add the project root to Python path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from core import fetch_job_description, tailor_resume, compile_pdf
+from core import scrape_and_parse, ResumeTailorAgent, compile_pdf
 
 
 def load_master_resume(file_path: str = "./data/master.tex") -> str:
@@ -39,37 +39,6 @@ def load_master_resume(file_path: str = "./data/master.tex") -> str:
     
     with open(path, 'r', encoding='utf-8') as f:
         return f.read()
-
-
-def extract_company_name(job_description: str) -> str:
-    """
-    Attempt to extract company name from job description.
-    Uses simple heuristics - looks for common patterns.
-    
-    Args:
-        job_description: Job description text
-        
-    Returns:
-        Company name or "Company" as fallback
-    """
-    import re
-    
-    # Look for patterns like "at [Company]" or "[Company] is"
-    patterns = [
-        r'at\s+([A-Z][A-Za-z\s&]+?)(?:\s+is|\s+in|\s+has|\.|,)',
-        r'([A-Z][A-Za-z\s&]+?)\s+is\s+(?:looking|seeking|hiring)',
-        r'Join\s+([A-Z][A-Za-z\s&]+?)(?:\s+and|\s+as|\.)',
-    ]
-    
-    for pattern in patterns:
-        match = re.search(pattern, job_description)
-        if match:
-            company = match.group(1).strip()
-            # Validate it's not too long and doesn't contain weird chars
-            if len(company) < 50 and company.replace(' ', '').replace('&', '').isalnum():
-                return company
-    
-    return "Company"
 
 
 def main():
@@ -147,27 +116,27 @@ Examples:
         print(f"   ✓ Loaded {len(master_latex)} characters from {args.master}")
         print()
         
-        # Step 2: Fetch job description
-        print("🔍 Fetching job description...")
+        # Step 2: Fetch and Parse job description
+        print("🔍 Fetching and Parsing job description...")
+        print("   (This uses Gemini to extract structured data...)")
         
-        if args.url:
-            print(f"   Source: {args.url}")
-            job_description = fetch_job_description(url=args.url)
-        elif args.file:
-            print(f"   Source: {args.file}")
-            job_description = fetch_job_description(file_path=args.file)
-        else:
-            print(f"   Source: Direct text input")
-            job_description = fetch_job_description(text=args.text)
+        job_posting = scrape_and_parse(
+            url=args.url,
+            file_path=args.file,
+            text=args.text
+        )
         
-        print(f"   ✓ Retrieved {len(job_description)} characters")
+        print(f"   ✓ Identified Company: {job_posting.company_name}")
+        print(f"   ✓ Identified Role: {job_posting.job_title}")
+        print(f"   ✓ Extracted {len(job_posting.key_requirements)} key requirements")
         print()
         
         # Step 3: Tailor resume with Gemini
         print("🤖 Tailoring resume with Gemini Pro...")
         print("   (This may take 10-30 seconds...)")
         
-        tailored_latex = tailor_resume(master_latex, job_description)
+        tailor_agent = ResumeTailorAgent()
+        tailored_latex = tailor_agent.tailor(master_latex, job_posting)
         
         print(f"   ✓ Received tailored resume ({len(tailored_latex)} characters)")
         print()
@@ -176,7 +145,9 @@ Examples:
         print("📄 Compiling LaTeX to PDF...")
         
         # Determine output filename
-        company_name = args.output or extract_company_name(job_description)
+        company_name = args.output or job_posting.company_name
+        # Sanitize company name for filename
+        company_name = "".join(c for c in company_name if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_')
         
         pdf_path = compile_pdf(
             latex_content=tailored_latex,
@@ -214,4 +185,3 @@ Examples:
 
 if __name__ == "__main__":
     sys.exit(main())
-

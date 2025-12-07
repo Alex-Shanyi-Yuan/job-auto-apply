@@ -7,6 +7,8 @@ import requests
 from bs4 import BeautifulSoup
 import re
 from typing import Optional
+from .models import JobPosting
+from .agents import JobParsingAgent
 
 
 def fetch_from_url(url: str, timeout: int = 10) -> str:
@@ -135,6 +137,19 @@ def fetch_job_description(
         return read_from_file(file_path)
     else:
         return clean_text(text)
+
+
+def scrape_and_parse(
+    url: Optional[str] = None,
+    file_path: Optional[str] = None,
+    text: Optional[str] = None
+) -> JobPosting:
+    """
+    Fetch and parse job description into structured data.
+    """
+    raw_text = fetch_job_description(url, file_path, text)
+    agent = JobParsingAgent()
+    return agent.parse(raw_text)
 
 
 if __name__ == "__main__":
