@@ -45,7 +45,7 @@ class GeminiTailorClient:
         Returns:
             Formatted prompt string
         """
-        prompt = f"""You are an expert resume writer and LaTeX specialist.
+        prompt = f"""You are an expert resume writer and LaTeX specialist with over 20 yeras of experience,
 
 I will provide you with:
 1. A complete LaTeX resume file
@@ -55,9 +55,10 @@ Your task:
 - Analyze the job description and identify key requirements, skills, and qualifications
 - Rewrite the resume content to highlight relevant experience and skills that match the job
 - Tailor bullet points to emphasize achievements and experience relevant to this specific role
+- Rewrite bullet points using the Google formula: "Accomplished [X] as measured by [Y], by doing [Z]"
 - Adjust the professional summary or objective to align with the position
 - Prioritize skills mentioned in the job description
-- Keep the resume concise and impactful (1-2 pages)
+- Keep the resume concise and impactful (strictly 1 page)
 - Maintain ALL LaTeX formatting, commands, and document structure EXACTLY
 - Do NOT add markdown formatting - use LaTeX commands only (e.g., \\textbf{{}} for bold)
 - Output ONLY valid LaTeX code with no additional explanations or comments
@@ -80,7 +81,7 @@ Return the complete tailored LaTeX resume below:"""
         self,
         master_latex: str,
         job_description: str,
-        max_retries: int = 1
+        max_retries: int = 3
     ) -> str:
         """
         Send resume and job description to Gemini for tailoring.
@@ -115,12 +116,13 @@ Return the complete tailored LaTeX resume below:"""
                 # Extract the generated text
                 tailored_latex = response.text
                 
-                # Basic validation
-                if not self._validate_latex(tailored_latex):
-                    raise ValueError("Generated content is not valid LaTeX")
-                
                 # Clean up the response (remove markdown code blocks if present)
                 tailored_latex = self._clean_response(tailored_latex)
+
+                # Basic validation
+                if not self._validate_latex(tailored_latex):
+                    print(tailored_latex)
+                    raise ValueError("Generated content is not valid LaTeX")
                 
                 return tailored_latex
                 
