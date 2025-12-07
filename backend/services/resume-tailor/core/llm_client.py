@@ -9,7 +9,8 @@ from google.genai import types
 from typing import Optional
 import time
 
-
+# TODO: seperate this into a llm object so we can reuse that code to extract company name from job description
+# we can also use that moduel to first clean up job description that is scraped from the website.
 class GeminiTailorClient:
     """Client for interacting with Google Gemini API."""
     
