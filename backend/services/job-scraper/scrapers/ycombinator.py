@@ -2,7 +2,7 @@ import asyncio
 from typing import List
 from playwright.async_api import async_playwright, Page
 from bs4 import BeautifulSoup
-from ..models import JobPosting
+from models import JobPosting
 from .base import BaseScraper
 
 class YCombinatorScraper(BaseScraper):

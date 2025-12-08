@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import List
-from ..models import JobPosting
+from models import JobPosting
 
 class BaseScraper(ABC):
     """
