@@ -31,6 +31,7 @@ We will use a **Hybrid Architecture** where Next.js acts as the orchestrator and
 **Runtime:** AWS Lambda (Python 3.11)
 
 **Responsibility:**
+* **Job Scraper:** Fetching jobs from dynamic websites (Playwright)
 * **Resume Parser:** Extracting text from PDFs
 * **The Tailor:** Running heavy LLM prompts (LangChain/OpenAI)
 * **PDF Compiler:** Running `pdflatex` to generate final assets
@@ -59,19 +60,22 @@ For users who prefer to run everything locally (or on a VPS) without AWS Cloud d
 
 ## 3. Detailed Module Specifications
 
-### Module A: Job Ingestion & Sourcing Engine (Next.js Cron)
+### Module A: Job Ingestion & Sourcing Engine (Python Service)
 
-**Runtime:** Next.js API Route (Cron Job) or simple Lambda
+**Runtime:** Python Service (Dockerized)
+
+**Technology:** Playwright + BeautifulSoup
 
 **Data Sources:**
-* Aggregator APIs: Integrate with Theirstack or JSearch
+* Direct Scraping: LinkedIn, YCombinator, Company Career Pages
+* Aggregator APIs (Optional)
 
 **Process:**
-1. Fetch jobs from API (TypeScript)
-2. Check DynamoDB for duplicates
-3. Save new jobs to DB
+1. **Browser Automation:** Playwright launches headless browsers to render dynamic JS content.
+2. **Extraction:** Parses DOM to extract structured job data (Title, Salary, Description).
+3. **Storage:** Saves unique jobs to PostgreSQL/DynamoDB.
 
-**Note:** TypeScript is perfect here because it's just JSON shuffling.
+**Why Python?** Robust ecosystem for scraping (Playwright, Scrapy) and handling anti-bot measures.
 
 ### Module B: The Intelligent Filter (Python Lambda)
 
