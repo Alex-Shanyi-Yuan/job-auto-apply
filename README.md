@@ -35,6 +35,28 @@ We will use a **Hybrid Architecture** where Next.js acts as the orchestrator and
 * **The Tailor:** Running heavy LLM prompts (LangChain/OpenAI)
 * **PDF Compiler:** Running `pdflatex` to generate final assets
 
+---
+
+## 2a. Alternative: Local Development Architecture (Self-Hosted)
+
+For users who prefer to run everything locally (or on a VPS) without AWS Cloud dependencies, the system can be run entirely via **Docker Compose**.
+
+### The "Orchestrator" (Local)
+* **Runtime:** Node.js (Next.js) running on `localhost:3000`
+* **Database:** PostgreSQL (running in Docker) instead of DynamoDB
+
+### The "Workers" (Local)
+* **Runtime:** Python API Server (FastAPI) running in Docker
+* **Exposure:** Exposed on `localhost:8000`
+* **Storage:** Local Docker Volumes (instead of S3)
+
+**Benefits of Local Approach:**
+* Zero cloud costs during development
+* Faster feedback loop (no deployment time)
+* Full control over data privacy
+
+---
+
 ## 3. Detailed Module Specifications
 
 ### Module A: Job Ingestion & Sourcing Engine (Next.js Cron)
@@ -83,21 +105,77 @@ We will use a **Hybrid Architecture** where Next.js acts as the orchestrator and
 2. Extension fetches the tailored resume data from Next.js API
 3. Extension auto-fills the DOM elements on the page
 
-## 4. Data Model (DynamoDB Schema Design)
+## 4. Data Model (Hybrid Database Strategy)
 
-### Table 1: Users
+We use a hybrid database approach to leverage the strengths of both SQL and NoSQL.
 
+### Primary Database: PostgreSQL (Job Data & Filtering)
+
+Since the core functionality involves complex filtering of job postings (e.g., "Salary > $150k AND Remote AND Python"), we use **PostgreSQL** for storing job data.
+
+**Table: Jobs**
+* `id` (UUID, PK)
+* `title` (Text)
+* `company` (Text)
+* `salary_min` (Int)
+* `salary_max` (Int)
+* `is_remote` (Boolean)
+* `tech_stack` (Array/JSONB)
+* `description` (Text)
+* `created_at` (Timestamp)
+
+**Why Postgres?**
+* Efficient complex queries (`WHERE salary > X AND remote = true`)
+* Full text search for job descriptions
+* Easy local hosting via Docker
+
+### Secondary Database: DynamoDB (User Session & State)
+
+For simple key-value lookups and high-scale user state, we can optionally use DynamoDB (or just use Postgres for everything in the local version).
+
+**Table: Users**
 * **PK:** `USER#{userId}`
-* **Attributes:** `email`, `stripe_customer_id`, `credits_remaining`, `master_resume_s3_key`
+* **Attributes:** `email`, `stripe_customer_id`, `credits_remaining`
 
-### Table 2: Applications
-
+**Table: Applications**
 * **PK:** `USER#{userId}`
 * **SK:** `APP#{jobHash}`
-* **Attributes:**
-  * `status`: (PENDING, TAILORING, READY, APPLIED)
-  * `tailored_resume_url`: (S3 Link)
-  * `match_score`: (Number)
+* **Attributes:** `status`, `s3_url`, `match_score`
+
+---
+
+## 4a. Database Strategy: DynamoDB vs. PostgreSQL
+
+While the initial design uses DynamoDB (for AWS Serverless synergy), **PostgreSQL is strongly recommended** for the Local/Self-Hosted version.
+
+### Why PostgreSQL?
+
+1.  **Complex Filtering:** The core feature of this app is filtering jobs (e.g., "Show me jobs > $150k AND Remote AND Python").
+    *   **DynamoDB:** Requires expensive "Scans" or complex GSI management for multi-field filtering.
+    *   **PostgreSQL:** Simple `WHERE salary > 150000 AND remote = true` queries.
+2.  **Relational Data:** The app has clear relationships: `Users` -> `Applications` -> `Jobs`. SQL handles joins naturally.
+3.  **Local Development:** Running a Postgres container is standard and lightweight compared to mocking DynamoDB.
+
+### How to Host PostgreSQL Locally?
+Simply add a service to your `docker-compose.yml`:
+
+```yaml
+services:
+  db:
+    image: postgres:15-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: autocareer
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+```
+
+This allows the Next.js app to connect via `DATABASE_URL="postgresql://user:password@localhost:5432/autocareer"`.
+
+---
 
 ## 5. Interface Contract (TypeScript <-> Python)
 

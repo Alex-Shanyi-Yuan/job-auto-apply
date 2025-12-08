@@ -21,7 +21,7 @@ A local CLI tool that takes a Master LaTeX Resume (.tex) and a Job Description, 
 
 ## Module 1: Job Description Scraper
 
-**Responsibility:** Fetch job description content from a URL or read from a text file.
+**Responsibility:** Fetch job description content from a URL or read from a text file, and parse it into structured data.
 
 **Location:** `backend/services/resume-tailor/core/jd_scraper.py`
 
@@ -32,24 +32,28 @@ A local CLI tool that takes a Master LaTeX Resume (.tex) and a Job Description, 
 * Use `BeautifulSoup` to extract text content (strip tags, scripts, styles)
 * If file: Read directly with `open()`
 * Clean excessive whitespace and normalize line breaks
+* **Parsing:** Use `JobParsingAgent` (from `agents.py`) to extract structured info (Company, Role, Requirements) into a `JobPosting` model.
 
-**Output:** Plain text string of job description.
+**Output:** `JobPosting` object (Pydantic model).
 
-**Dependencies:** `requests`, `beautifulsoup4`
+**Dependencies:** `requests`, `beautifulsoup4`, `pydantic`
 
 ---
 
-## Module 2: Gemini LLM Client
+## Module 2: LLM Client & Agents
 
-**Responsibility:** Send the entire master LaTeX file and job description to Google Gemini Pro, receive a complete tailored LaTeX document.
+**Responsibility:** Handle interactions with Google Gemini Pro. `GeminiClient` provides the low-level API wrapper, while `ResumeTailorAgent` handles the specific prompting logic.
 
-**Location:** `backend/services/resume-tailor/core/llm_client.py`
+**Location:** 
+* `backend/services/resume-tailor/core/llm_client.py` (Generic Client)
+* `backend/services/resume-tailor/core/agents.py` (Business Logic)
+* `backend/services/resume-tailor/core/models.py` (Data Structures)
 
 **Input:**
 * `master_latex`: Complete contents of `master.tex` as string
-* `job_description`: Cleaned job description text
+* `job_posting`: Structured `JobPosting` object
 
-**Prompt Strategy:**
+**Prompt Strategy (in `ResumeTailorAgent`):**
 ```
 You are an expert resume writer and LaTeX specialist. 
 
@@ -69,21 +73,19 @@ Master Resume LaTeX:
 {master_latex}
 
 Job Description:
-{job_description}
+{job_description_text}
 
 Return the complete tailored LaTeX resume:
 ```
 
 **Processing:**
-* Initialize Google Gemini API client with `GOOGLE_API_KEY`
-* Use `gemini-1.5-pro` model
-* Send prompt with interpolated resume and JD
-* Extract response text (complete LaTeX document)
-* Validate response contains LaTeX document structure (`\documentclass`, `\begin{document}`, etc.)
+* `GeminiClient`: Initializes `google.genai` client with `GOOGLE_API_KEY`.
+* `ResumeTailorAgent`: Constructs the prompt and calls `GeminiClient`.
+* Validates response contains LaTeX document structure.
 
 **Output:** Tailored LaTeX document as string.
 
-**Dependencies:** `google-generativeai`
+**Dependencies:** `google-genai`, `pydantic`
 
 ---
 
@@ -187,7 +189,9 @@ python main.py --text "Job Title: Senior Engineer..."
         ├── /core                         # Business logic modules
         │   ├── __init__.py
         │   ├── jd_scraper.py            # Module 1
-        │   ├── llm_client.py            # Module 2  
+        │   ├── llm_client.py            # Module 2 (Client)
+        │   ├── agents.py                # Module 2 (Logic)
+        │   ├── models.py                # Data Models
         │   └── latex_compiler.py        # Module 3
         │
         ├── /data
@@ -226,8 +230,9 @@ python main.py --text "Job Title: Senior Engineer..."
 ```
 requests>=2.31.0
 beautifulsoup4>=4.12.0
-google-generativeai>=0.3.0
+google-genai
 python-dotenv>=1.0.0
+pydantic>=2.0.0
 ```
 
 ---

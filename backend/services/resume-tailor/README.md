@@ -23,7 +23,7 @@ A CLI tool that automatically tailors your LaTeX resume to match specific job de
 
 2. **Set up your API key**
    ```bash
-   copy .env.example .env
+   cp .env.example .env
    # Edit .env and add your GOOGLE_API_KEY
    ```
 
@@ -103,6 +103,8 @@ resume-tailor/
 │   ├── __init__.py
 │   ├── jd_scraper.py         # Job description fetching
 │   ├── llm_client.py         # Gemini API integration
+│   ├── agents.py             # AI Agents (Parsing & Tailoring)
+│   ├── models.py             # Data models
 │   └── latex_compiler.py     # PDF compilation
 ├── data/
 │   └── master.tex            # Your master resume (edit this!)
