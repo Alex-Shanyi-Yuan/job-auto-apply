@@ -128,7 +128,7 @@ Examples:
         
         print(f"   ✓ Identified Company: {job_posting.company_name}")
         print(f"   ✓ Identified Role: {job_posting.job_title}")
-        print(f"   ✓ Extracted {len(job_posting.key_requirements)} key requirements")
+        print(f"   ✓ Extracted {len(job_posting.key_requirements)} key requirements: {job_posting.key_requirements}")
         print()
         
         # Step 3: Tailor resume with Gemini
