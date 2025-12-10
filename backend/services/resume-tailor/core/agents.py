@@ -14,7 +14,7 @@ class JobParsingAgent:
         Parse raw job description text into a structured JobPosting object.
         """
         prompt = f"""
-        You are an expert HR assistant. Analyze the following job description text and extract the key information.
+        You are an expert HR assistant. Analyze the following job description and extract the key information.
         
         Raw Job Description:
         {raw_text}

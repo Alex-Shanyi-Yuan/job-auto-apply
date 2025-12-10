@@ -26,26 +26,27 @@ def fetch_from_url(url: str, timeout: int = 10) -> str:
         requests.RequestException: If the request fails
     """
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        response = requests.get(url, headers=headers, timeout=timeout)
-        response.raise_for_status()
+        # Old logic to scrap the website
+        # headers = {
+        #     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        # }
+        # response = requests.get(url, headers=headers, timeout=timeout)
+        # response.raise_for_status()
         
-        # Parse HTML
-        soup = BeautifulSoup(response.content, 'html.parser')
+        # # Parse HTML
+        # soup = BeautifulSoup(response.content, 'html.parser')
         
-        # Remove script and style elements
-        for script in soup(['script', 'style', 'nav', 'header', 'footer']):
-            script.decompose()
+        # # Remove script and style elements
+        # for script in soup(['script', 'style', 'nav', 'header', 'footer']):
+        #     script.decompose()
         
-        # Get text content
-        text = soup.get_text(separator='\n')
+        # # Get text content
+        # text = soup.get_text(separator='\n')
         
-        # Clean up whitespace
-        text = clean_text(text)
+        # # Clean up whitespace
+        # text = clean_text(text)
         
-        return text
+        return f"Description in the url: {url}"
         
     except requests.RequestException as e:
         raise Exception(f"Failed to fetch URL: {str(e)}")
@@ -149,7 +150,7 @@ def scrape_and_parse(
     """
     raw_text = fetch_job_description(url, file_path, text)
     agent = JobParsingAgent()
-    return agent.parse(raw_text)
+    return agent.parse(url)
 
 
 if __name__ == "__main__":
