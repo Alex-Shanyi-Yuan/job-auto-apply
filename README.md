@@ -28,13 +28,13 @@ We will use a **Hybrid Architecture** where Next.js acts as the orchestrator and
 
 ### The "Workers" (Compute Layer)
 
-**Runtime:** AWS Lambda (Python 3.11)
+**Runtime:** AWS Lambda (Python 3.11 & Node.js 20)
 
 **Responsibility:**
-* **Job Scraper:** Fetching jobs from dynamic websites (Playwright)
-* **Resume Parser:** Extracting text from PDFs
-* **The Tailor:** Running heavy LLM prompts (LangChain/OpenAI)
-* **PDF Compiler:** Running `pdflatex` to generate final assets
+* **Job Scraper:** Fetching jobs from dynamic websites (Playwright / Node.js)
+* **Resume Parser:** Extracting text from PDFs (Python)
+* **The Tailor:** Running heavy LLM prompts (Python)
+* **PDF Compiler:** Running `pdflatex` to generate final assets (Python)
 
 ---
 
@@ -60,11 +60,11 @@ For users who prefer to run everything locally (or on a VPS) without AWS Cloud d
 
 ## 3. Detailed Module Specifications
 
-### Module A: Job Ingestion & Sourcing Engine (Python Service)
+### Module A: Job Ingestion & Sourcing Engine (TypeScript Service)
 
-**Runtime:** Python Service (Dockerized)
+**Runtime:** Node.js Service (Dockerized)
 
-**Technology:** Playwright + BeautifulSoup
+**Technology:** Playwright + Cheerio
 
 **Data Sources:**
 * Direct Scraping: LinkedIn, YCombinator, Company Career Pages
@@ -75,7 +75,7 @@ For users who prefer to run everything locally (or on a VPS) without AWS Cloud d
 2. **Extraction:** Parses DOM to extract structured job data (Title, Salary, Description).
 3. **Storage:** Saves unique jobs to PostgreSQL/DynamoDB.
 
-**Why Python?** Robust ecosystem for scraping (Playwright, Scrapy) and handling anti-bot measures.
+**Why TypeScript?** Native support for Playwright, shared types with the Next.js frontend, and excellent async handling.
 
 ### Module B: The Intelligent Filter (Python Lambda)
 
