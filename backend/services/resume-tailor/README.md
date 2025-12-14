@@ -34,13 +34,13 @@ A CLI tool that automatically tailors your LaTeX resume to match specific job de
 4. **Run the tool**
    ```bash
    # From a URL
-   docker-compose run tailor --url "https://jobs.example.com/posting"
+   docker-compose run --rm tailor --url "https://jobs.example.com/posting"
    
    # From a file
-   docker-compose run tailor --file "job_description.txt"
+   docker-compose run --rm tailor --file "job_description.txt"
    
    # With custom output name
-   docker-compose run tailor --url "https://..." --output "GoogleSRE"
+   docker-compose run --rm tailor --url "https://..." --output "GoogleSRE"
    ```
 
 ### Option 2: Local Installation
