@@ -5,9 +5,10 @@ google-genai
 python-dotenv>=1.0.0
 pydantic>=2.0.0
 
-# Optional: Keep these for future web service integration
-# openai
-# boto3
-# fastapi
-# uvicorn
+# Web Service & Database
+fastapi
+uvicorn
+sqlmodel
+psycopg2-binary
+httpx
 

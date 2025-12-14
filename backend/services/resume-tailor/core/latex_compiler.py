@@ -6,6 +6,7 @@ Compiles LaTeX files to PDF using pdflatex.
 import subprocess
 import os
 import shutil
+import uuid
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Tuple
@@ -192,8 +193,12 @@ def compile_pdf(
     """
     compiler = LaTeXCompiler(output_dir=output_dir)
     
+    # Generate unique filename for intermediate files
+    unique_id = str(uuid.uuid4())
+    tex_filename = f"resume_{unique_id}.tex"
+    
     # Write LaTeX file
-    tex_path = compiler.write_tex_file(latex_content)
+    tex_path = compiler.write_tex_file(latex_content, filename=tex_filename)
     print(f"✓ LaTeX file written to: {tex_path}")
     
     # Compile to PDF
@@ -213,6 +218,9 @@ def compile_pdf(
     # Cleanup auxiliary files
     if cleanup:
         compiler.cleanup_auxiliary_files(base_name)
+        # Also remove the intermediate .tex file
+        if tex_path.exists():
+            tex_path.unlink()
         print("✓ Auxiliary files cleaned up")
     
     return str(pdf_path.absolute())

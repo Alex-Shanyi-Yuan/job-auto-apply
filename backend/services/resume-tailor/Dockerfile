@@ -27,9 +27,9 @@ RUN mkdir -p output data
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 
-# Set entrypoint to python main.py so arguments are appended
-ENTRYPOINT ["python", "main.py"]
+# Expose port for FastAPI
+EXPOSE 8000
 
-# Default arguments if none provided
-CMD ["--help"]
+# Run the FastAPI server
+CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]
 

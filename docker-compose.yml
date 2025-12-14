@@ -1,0 +1,44 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: autocareer
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - autocareer-network
+
+  scraper:
+    build: ./backend/services/job-scraper
+    ports:
+      - "8001:8001"
+    networks:
+      - autocareer-network
+
+  tailor:
+    build: ./backend/services/resume-tailor
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://user:password@postgres:5432/autocareer
+      - SCRAPER_SERVICE_URL=http://scraper:8001
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+    volumes:
+      - ./backend/services/resume-tailor/data:/app/data
+      - ./backend/services/resume-tailor/output:/app/output
+    depends_on:
+      - postgres
+      - scraper
+    networks:
+      - autocareer-network
+
+networks:
+  autocareer-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
