@@ -2,234 +2,124 @@
 
 ## 1. Executive Summary
 
-**AutoCareer** is a SaaS platform designed to automate the job search and application process for high-value candidates. The system aggregates high-paying job postings, filters them based on user-defined criteria and experience compatibility, uses Large Language Models (LLMs) to tailor application assets (resumes, cover letters), and facilitates the application process.
+**AutoCareer** is a self-hosted SaaS platform designed to automate the job search and application process. It aggregates job postings, filters them based on user-defined criteria, uses Large Language Models (LLMs) to tailor application assets (resumes), and tracks the application process via a centralized dashboard.
 
 ### Core Value Proposition
 
-* **High-Signal Sourcing:** Only surfacing jobs that meet strict salary/tier criteria
-* **Intelligent Filtering:** Using LLMs to discard jobs where the user is under/over-qualified
-* **Hyper-Personalization:** Rewriting resumes for every single application
-* **Application Tracking:** Centralized dashboard for all applied roles
+* **Automated Tailoring:** Rewriting resumes for every single application using Google Gemini Pro.
+* **Application Tracking:** Centralized dashboard for all applied roles.
+* **Privacy-First:** Self-hosted architecture ensures your data stays on your machine.
 
-## 2. System Architecture (Hybrid: Next.js + Python Serverless)
+## 2. System Architecture (Microservices)
 
-We will use a **Hybrid Architecture** where Next.js acts as the orchestrator and Python Lambdas act as specialized workers.
+We use a **Microservices Architecture** orchestrated by Docker Compose.
 
-### The "Orchestrator" (Frontend & API)
+### The "Orchestrator" (Frontend)
 
-**Framework:** Next.js 14+ (App Router)  
-**Hosting:** Vercel or AWS Amplify
-
-**Responsibility:**
-* User Authentication (Auth.js / Clerk)
-* Database Operations (CRUD on Users/Jobs)
-* Stripe Payments
-* Orchestration: Deciding when to call the Python workers
-
-### The "Workers" (Compute Layer)
-
-**Runtime:** AWS Lambda (Python 3.11 & Node.js 20)
+**Framework:** Next.js 14 (App Router)
+**UI Library:** shadcn/ui + Tailwind CSS
+**Port:** `3000`
 
 **Responsibility:**
-* **Job Scraper:** Fetching jobs from dynamic websites (Playwright / Node.js)
-* **Resume Parser:** Extracting text from PDFs (Python)
-* **The Tailor:** Running heavy LLM prompts (Python)
-* **PDF Compiler:** Running `pdflatex` to generate final assets (Python)
+* User Interface for Dashboard and Job Details.
+* Triggering backend processes via API calls.
+* Displaying real-time status updates.
 
----
+### The "Workers" (Backend Services)
 
-## 2a. Alternative: Local Development Architecture (Self-Hosted)
+#### Service A: Resume Tailor Service
+**Runtime:** Python 3.11 (FastAPI)
+**Port:** `8000`
+**Responsibility:**
+* **API Server:** Handles requests from Frontend.
+* **Orchestration:** Calls Scraper Service, then invokes LLM Agents.
+* **Resume Tailoring:** Uses Gemini Pro to rewrite resume sections.
+* **PDF Compilation:** Uses `pdflatex` to generate final PDFs.
+* **Database Management:** CRUD operations on PostgreSQL.
 
-For users who prefer to run everything locally (or on a VPS) without AWS Cloud dependencies, the system can be run entirely via **Docker Compose**.
+#### Service B: Job Scraper Service
+**Runtime:** Python 3.11 (FastAPI) + Playwright
+**Port:** `8001`
+**Responsibility:**
+* **Headless Browsing:** Renders dynamic JavaScript content.
+* **Extraction:** Returns clean text from job URLs.
 
-### The "Orchestrator" (Local)
-* **Runtime:** Node.js (Next.js) running on `localhost:3000`
-* **Database:** PostgreSQL (running in Docker) instead of DynamoDB
+### The "Persistence" (Database)
 
-### The "Workers" (Local)
-* **Runtime:** Python API Server (FastAPI) running in Docker
-* **Exposure:** Exposed on `localhost:8000`
-* **Storage:** Local Docker Volumes (instead of S3)
-
-**Benefits of Local Approach:**
-* Zero cloud costs during development
-* Faster feedback loop (no deployment time)
-* Full control over data privacy
+**System:** PostgreSQL 15
+**Port:** `5432`
+**Responsibility:**
+* Storing Job Applications, Status, and Metadata.
+* Data persistence via Docker Volumes.
 
 ---
 
 ## 3. Detailed Module Specifications
 
-### Module A: Job Ingestion & Sourcing Engine (TypeScript Service)
+### Module A: Job Scraper Service
 
-**Runtime:** Node.js Service (Dockerized)
-
-**Technology:** Playwright + Cheerio
-
-**Data Sources:**
-* Direct Scraping: LinkedIn, YCombinator, Company Career Pages
-* Aggregator APIs (Optional)
+**Technology:** Playwright + BeautifulSoup + FastAPI
 
 **Process:**
-1. **Browser Automation:** Playwright launches headless browsers to render dynamic JS content.
-2. **Extraction:** Parses DOM to extract structured job data (Title, Salary, Description).
-3. **Storage:** Saves unique jobs to PostgreSQL/DynamoDB.
+1. Receives `POST /scrape` with URL.
+2. Launches headless Chromium browser.
+3. Renders page and extracts raw HTML.
+4. Cleans HTML to text using BeautifulSoup.
+5. Returns structured JSON `{ title, text, url }`.
 
-**Why TypeScript?** Native support for Playwright, shared types with the Next.js frontend, and excellent async handling.
+### Module B: Resume Tailor Service
 
-### Module B: The Intelligent Filter (Python Lambda)
-
-**Runtime:** Python Lambda
-
-**Why Python?** Complex text analysis and "fuzzy matching" are easier with Python libraries.
-
-**Trigger:** EventBridge event when new jobs are added  
-**Input:** User Profile JSON + Job Description Text  
-**Output:** `{ "match_score": 85, "reason": "..." }`
-
-### Module C: Resume Tailoring Engine (Python Lambda)
-
-**Runtime:** Python Lambda (Container Image)
-
-**Why Container?** We need to bundle a full LaTeX distribution (approx 500MB), which is too large for a standard Lambda zip.
+**Technology:** FastAPI + SQLModel + Google Gemini + LaTeX
 
 **Process:**
-1. **Input:** Master Resume (LaTeX) + Job Description
-2. **LLM Task:** Rewrite specific LaTeX sections
-3. **Compilation:** Run `pdflatex` subprocess to build PDF
-4. **Storage:** Upload result to S3
-5. **Response:** Return the S3 Signed URL to Next.js
+1. **Ingest:** Receives `POST /apply` from Frontend.
+2. **Scrape:** Calls Module A to get job text.
+3. **Parse:** Uses LLM to extract "Key Requirements" from job text.
+4. **Tailor:** Uses LLM to rewrite Master Resume based on requirements.
+5. **Compile:** Generates PDF from tailored LaTeX.
+6. **Save:** Updates Database with status and PDF path.
 
-### Module D: The Application Agent (Browser Extension)
+### Module C: Frontend Dashboard
 
-**Runtime:** Client-Side JavaScript (Plasmo Framework)
+**Technology:** Next.js + React Query (or `useEffect` polling)
 
 **Process:**
-1. User clicks "Apply" on a job board (e.g., Workday)
-2. Extension fetches the tailored resume data from Next.js API
-3. Extension auto-fills the DOM elements on the page
-
-## 4. Data Model (Hybrid Database Strategy)
-
-We use a hybrid database approach to leverage the strengths of both SQL and NoSQL.
-
-### Primary Database: PostgreSQL (Job Data & Filtering)
-
-Since the core functionality involves complex filtering of job postings (e.g., "Salary > $150k AND Remote AND Python"), we use **PostgreSQL** for storing job data.
-
-**Table: Jobs**
-* `id` (UUID, PK)
-* `title` (Text)
-* `company` (Text)
-* `salary_min` (Int)
-* `salary_max` (Int)
-* `is_remote` (Boolean)
-* `tech_stack` (Array/JSONB)
-* `description` (Text)
-* `created_at` (Timestamp)
-
-**Why Postgres?**
-* Efficient complex queries (`WHERE salary > X AND remote = true`)
-* Full text search for job descriptions
-* Easy local hosting via Docker
-
-### Secondary Database: DynamoDB (User Session & State)
-
-For simple key-value lookups and high-scale user state, we can optionally use DynamoDB (or just use Postgres for everything in the local version).
-
-**Table: Users**
-* **PK:** `USER#{userId}`
-* **Attributes:** `email`, `stripe_customer_id`, `credits_remaining`
-
-**Table: Applications**
-* **PK:** `USER#{userId}`
-* **SK:** `APP#{jobHash}`
-* **Attributes:** `status`, `s3_url`, `match_score`
+1. **Dashboard:** Lists all jobs with status badges (Applied, Processing, Failed).
+2. **Job Details:** Shows job metadata, key requirements, and PDF download.
+3. **Polling:** Periodically checks backend for status updates.
 
 ---
 
-## 4a. Database Strategy: DynamoDB vs. PostgreSQL
+## 4. Data Model (PostgreSQL)
 
-While the initial design uses DynamoDB (for AWS Serverless synergy), **PostgreSQL is strongly recommended** for the Local/Self-Hosted version.
+**Table: `job`**
 
-### Why PostgreSQL?
-
-1.  **Complex Filtering:** The core feature of this app is filtering jobs (e.g., "Show me jobs > $150k AND Remote AND Python").
-    *   **DynamoDB:** Requires expensive "Scans" or complex GSI management for multi-field filtering.
-    *   **PostgreSQL:** Simple `WHERE salary > 150000 AND remote = true` queries.
-2.  **Relational Data:** The app has clear relationships: `Users` -> `Applications` -> `Jobs`. SQL handles joins naturally.
-3.  **Local Development:** Running a Postgres container is standard and lightweight compared to mocking DynamoDB.
-
-### How to Host PostgreSQL Locally?
-Simply add a service to your `docker-compose.yml`:
-
-```yaml
-services:
-  db:
-    image: postgres:15-alpine
-    ports:
-      - "5432:5432"
-    environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: autocareer
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-```
-
-This allows the Next.js app to connect via `DATABASE_URL="postgresql://user:password@localhost:5432/autocareer"`.
+| Column | Type | Description |
+| :--- | :--- | :--- |
+| `id` | `Integer` (PK) | Unique ID |
+| `url` | `String` | Original Job URL |
+| `company` | `String` | Company Name |
+| `title` | `String` | Job Title |
+| `status` | `String` | `processing`, `applied`, `failed` |
+| `requirements` | `JSON` | List of key requirements extracted by AI |
+| `pdf_path` | `String` | Path to generated PDF |
+| `created_at` | `DateTime` | Timestamp |
 
 ---
 
-## 5. Interface Contract (TypeScript <-> Python)
+## 5. Development Workflow
 
-To prevent errors, we define **Shared Interfaces** in TypeScript that match the Python output.
+### Prerequisites
+* Docker & Docker Compose
+* Google Gemini API Key
 
-**TypeScript Interface:**
-
-```typescript
-interface TailorResponse {
-  jobId: string;
-  s3Url: string; // The result PDF
-  generatedCoverLetter: string;
-  tokenUsage: number;
-}
+### Running the Stack
+```bash
+docker-compose up --build
 ```
 
-**Next.js Call (Example):**
-
-```typescript
-// Next.js Server Action
-async function generateApplication(jobId: string) {
-  const result = await fetch(process.env.PYTHON_LAMBDA_URL, {
-    method: 'POST',
-    body: JSON.stringify({ jobId, userId: currentUser.id })
-  });
-  return result.json() as TailorResponse;
-}
-```
-
-## 6. Development Phases
-
-### Phase 1: Local Hybrid Dev
-
-* **Backend:** Run the Python script (`main.py`) locally on port 8000 (FastAPI or simple script)
-* **Frontend:** Run Next.js on port 3000
-* **Connection:** Next.js proxies requests to `localhost:8000`
-
-### Phase 2: Cloud Deployment
-
-* **Backend:** Deploy Python code to AWS Lambda (using SST or Serverless Framework)
-* **Frontend:** Deploy Next.js to Vercel/Amplify
-* **Connection:** Next.js calls the private Lambda Function URL
-
-## 7. Recommended Tech Stack Summary
-
-| Component | Technology | Reasoning |
-|-----------|-----------|-----------|
-| Orchestrator | Next.js (App Router) | Best-in-class for UI, Auth, and simple API routes |
-| Worker Runtime | AWS Lambda (Python) | Access to powerful AI/NLP libraries and LaTeX tools |
-| Infrastructure | SST (Ion) | Define both Next.js and Python Lambdas in one `sst.config.ts` |
-| Database | DynamoDB | Single-digit millisecond latency for job tracking |
-| LLM | OpenAI GPT-4o | Via `openai` Python SDK |
-| PDF Engine | LaTeX (TeX Live) | Bundled in a Docker container for Lambda |
+### Access Points
+* **Frontend:** http://localhost:3000
+* **Tailor API:** http://localhost:8000/docs
+* **Scraper API:** http://localhost:8001/docs
+* **Database:** localhost:5432 (User: `user`, Pass: `password`, DB: `autocareer`)
