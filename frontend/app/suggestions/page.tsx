@@ -29,8 +29,8 @@ export default function SuggestionsPage() {
   const [editUrl, setEditUrl] = useState("");
   const [editPrompt, setEditPrompt] = useState("");
   
-  // Apply loading state
-  const [applyingJobId, setApplyingJobId] = useState<number | null>(null);
+  // Apply loading state - track multiple jobs being applied to
+  const [applyingJobIds, setApplyingJobIds] = useState<Set<number>>(new Set());
 
   const loadData = useCallback(async () => {
     try {
@@ -119,7 +119,8 @@ export default function SuggestionsPage() {
   };
 
   const handleApply = async (job: Job) => {
-    setApplyingJobId(job.id);
+    // Add job to the set of applying jobs
+    setApplyingJobIds(prev => new Set(prev).add(job.id));
     try {
       // Start the application process
       const appliedJob = await applyForJob(job.url);
@@ -135,13 +136,13 @@ export default function SuggestionsPage() {
               if (updatedJob.status === 'applied') {
                 // Success - remove from suggestions
                 setSuggestions(prev => prev.filter(j => j.id !== job.id));
-                setError(null);
+                // Don't clear error for this job - other jobs might have errors
               } else if (updatedJob.status === 'failed') {
                 // Show the actual error message from the backend
                 const errorMsg = updatedJob.error_message 
                   ? `Failed to generate resume for "${job.title}": ${updatedJob.error_message}`
                   : `Failed to generate resume for "${job.title}"`;
-                setError(errorMsg);
+                setError(prev => prev ? `${prev}\n${errorMsg}` : errorMsg);
               }
               return;
             }
@@ -150,15 +151,26 @@ export default function SuggestionsPage() {
           }
         }
         // Timeout - still processing after 2 minutes
-        setError("Resume generation is taking longer than expected. Check the dashboard for status.");
+        setError(prev => {
+          const msg = `Resume generation for "${job.title}" is taking longer than expected.`;
+          return prev ? `${prev}\n${msg}` : msg;
+        });
       };
       
       await pollForCompletion();
     } catch (err) {
       console.error("Failed to apply", err);
-      setError("Failed to start application");
+      setError(prev => {
+        const msg = `Failed to start application for "${job.title}"`;
+        return prev ? `${prev}\n${msg}` : msg;
+      });
     } finally {
-      setApplyingJobId(null);
+      // Remove job from the set of applying jobs
+      setApplyingJobIds(prev => {
+        const next = new Set(prev);
+        next.delete(job.id);
+        return next;
+      });
     }
   };
 
@@ -527,11 +539,11 @@ export default function SuggestionsPage() {
                       </svg>
                     </a>
                     <div className="flex gap-2">
-                      <Button variant="outline" size="sm" onClick={() => handleDismiss(job.id)} disabled={applyingJobId === job.id}>
+                      <Button variant="outline" size="sm" onClick={() => handleDismiss(job.id)} disabled={applyingJobIds.has(job.id)}>
                         Dismiss
                       </Button>
-                      <Button size="sm" onClick={() => handleApply(job)} disabled={applyingJobId === job.id}>
-                        {applyingJobId === job.id ? (
+                      <Button size="sm" onClick={() => handleApply(job)} disabled={applyingJobIds.has(job.id)}>
+                        {applyingJobIds.has(job.id) ? (
                           <>
                             <svg className="animate-spin -ml-1 mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
