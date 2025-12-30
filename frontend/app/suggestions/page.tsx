@@ -168,11 +168,12 @@ export default function SuggestionsPage() {
     }
   };
 
-  const getScoreBadgeColor = (score: number | undefined) => {
-    if (score === undefined) return "secondary";
-    if (score >= 80) return "default";
-    if (score >= 60) return "secondary";
-    return "outline";
+  const getScoreBadgeStyle = (score: number | undefined) => {
+    if (score === undefined) return "bg-gray-100 text-gray-600";
+    if (score >= 80) return "bg-green-100 text-green-700 border-green-300";
+    if (score >= 60) return "bg-yellow-100 text-yellow-700 border-yellow-300";
+    if (score >= 40) return "bg-orange-100 text-orange-700 border-orange-300";
+    return "bg-red-100 text-red-700 border-red-300";
   };
 
   const isScanning = scanStatus?.is_scanning ?? false;
@@ -463,7 +464,7 @@ export default function SuggestionsPage() {
                       {job.title}
                     </CardTitle>
                     {job.score !== undefined && (
-                      <Badge variant={getScoreBadgeColor(job.score)} className="shrink-0">
+                      <Badge className={`shrink-0 ${getScoreBadgeStyle(job.score)}`}>
                         {job.score}%
                       </Badge>
                     )}
