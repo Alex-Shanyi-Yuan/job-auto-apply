@@ -468,7 +468,12 @@ export default function SuggestionsPage() {
                       </Badge>
                     )}
                   </div>
-                  <CardDescription>{job.company}</CardDescription>
+                  <CardDescription className="flex justify-between items-center">
+                    <span>{job.company}</span>
+                    <span className="text-xs text-gray-400">
+                      {new Date(job.created_at).toLocaleDateString()}
+                    </span>
+                  </CardDescription>
                 </CardHeader>
                 <CardContent className="flex-1 flex flex-col justify-end">
                   <div className="flex justify-between items-center mt-4 gap-2">
