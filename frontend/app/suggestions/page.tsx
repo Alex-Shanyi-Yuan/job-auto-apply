@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { 
   getSources, createSource, deleteSource, updateSource,
   getSuggestions, refreshSuggestions, applyForJob, dismissJob,
-  getScanStatus, getJob,
+  getScanStatus, getJob, getGlobalFilter, updateGlobalFilter,
   JobSource, Job, ScanStatus
 } from "@/lib/api";
 
@@ -23,6 +23,11 @@ export default function SuggestionsPage() {
   const [scanStatus, setScanStatus] = useState<ScanStatus | null>(null);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   
+  // Global filter state
+  const [globalFilter, setGlobalFilter] = useState("");
+  const [editingGlobalFilter, setEditingGlobalFilter] = useState(false);
+  const [tempGlobalFilter, setTempGlobalFilter] = useState("");
+  
   // Edit mode state
   const [editingSourceId, setEditingSourceId] = useState<number | null>(null);
   const [editName, setEditName] = useState("");
@@ -34,12 +39,14 @@ export default function SuggestionsPage() {
 
   const loadData = useCallback(async () => {
     try {
-      const [sourcesData, suggestionsData] = await Promise.all([
+      const [sourcesData, suggestionsData, globalFilterData] = await Promise.all([
         getSources(),
-        getSuggestions()
+        getSuggestions(),
+        getGlobalFilter()
       ]);
       setSources(sourcesData);
       setSuggestions(suggestionsData);
+      setGlobalFilter(globalFilterData);
       setError(null);
     } catch (err) {
       console.error("Failed to load data", err);
@@ -76,12 +83,12 @@ export default function SuggestionsPage() {
   }, [loadData, pollScanStatus]);
 
   const handleAddSource = async () => {
-    if (!newName || !newUrl || !newPrompt) {
-      setError("Please fill in all fields");
+    if (!newName || !newUrl) {
+      setError("Please fill in name and URL");
       return;
     }
     try {
-      await createSource(newName, newUrl, newPrompt);
+      await createSource(newName, newUrl, newPrompt || undefined);
       setNewName("");
       setNewUrl("");
       setNewPrompt("");
@@ -91,6 +98,23 @@ export default function SuggestionsPage() {
       console.error("Failed to add source", err);
       setError("Failed to add source");
     }
+  };
+
+  const handleSaveGlobalFilter = async () => {
+    try {
+      await updateGlobalFilter(tempGlobalFilter);
+      setGlobalFilter(tempGlobalFilter);
+      setEditingGlobalFilter(false);
+      setError(null);
+    } catch (err) {
+      console.error("Failed to update global filter", err);
+      setError("Failed to update global filter");
+    }
+  };
+
+  const startEditingGlobalFilter = () => {
+    setTempGlobalFilter(globalFilter);
+    setEditingGlobalFilter(true);
   };
 
   const handleDeleteSource = async (id: number) => {
@@ -187,7 +211,7 @@ export default function SuggestionsPage() {
     setEditingSourceId(source.id);
     setEditName(source.name);
     setEditUrl(source.url);
-    setEditPrompt(source.filter_prompt);
+    setEditPrompt(source.filter_prompt || "");
   };
 
   const cancelEditing = () => {
@@ -198,8 +222,8 @@ export default function SuggestionsPage() {
   };
 
   const handleUpdateSource = async () => {
-    if (!editingSourceId || !editName || !editUrl || !editPrompt) {
-      setError("Please fill in all fields");
+    if (!editingSourceId || !editName || !editUrl) {
+      setError("Please fill in name and URL");
       return;
     }
     try {
@@ -291,18 +315,18 @@ export default function SuggestionsPage() {
                 <div 
                   className="bg-blue-600 h-2 rounded-full transition-all duration-300"
                   style={{ 
-                    width: scanStatus.total_sources > 0 
-                      ? `${(scanStatus.sources_completed / scanStatus.total_sources) * 100}%` 
+                    width: scanStatus.sources_total > 0 
+                      ? `${(scanStatus.sources_completed / scanStatus.sources_total) * 100}%` 
                       : "0%" 
                   }}
                 />
               </div>
               
               {/* Stats */}
-              <div className="grid grid-cols-4 gap-4 text-center">
+              <div className="grid grid-cols-3 gap-4 text-center">
                 <div>
                   <p className="text-2xl font-bold text-blue-900">
-                    {scanStatus.sources_completed}/{scanStatus.total_sources}
+                    {scanStatus.sources_completed}/{scanStatus.sources_total}
                   </p>
                   <p className="text-xs text-blue-700">Sources</p>
                 </div>
@@ -313,10 +337,6 @@ export default function SuggestionsPage() {
                 <div>
                   <p className="text-2xl font-bold text-blue-900">{scanStatus.jobs_scored}</p>
                   <p className="text-xs text-blue-700">Jobs Scored</p>
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-blue-900">{scanStatus.jobs_added}</p>
-                  <p className="text-xs text-blue-700">New Jobs</p>
                 </div>
               </div>
             </div>
@@ -333,6 +353,53 @@ export default function SuggestionsPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
+          {/* Global Filter */}
+          <div className="p-4 bg-purple-50 border border-purple-200 rounded-lg">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <svg className="h-5 w-5 text-purple-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                </svg>
+                <Label className="font-semibold text-purple-900">Global Filter</Label>
+              </div>
+              {!editingGlobalFilter && (
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={startEditingGlobalFilter}
+                  disabled={isScanning}
+                >
+                  <svg className="h-4 w-4 text-purple-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                </Button>
+              )}
+            </div>
+            <p className="text-xs text-purple-700 mb-2">
+              This filter is applied to ALL sources. Individual source filters are combined with this.
+            </p>
+            {editingGlobalFilter ? (
+              <div className="flex gap-2">
+                <Input
+                  value={tempGlobalFilter}
+                  onChange={(e) => setTempGlobalFilter(e.target.value)}
+                  placeholder="e.g., Remote software engineering roles, no senior positions"
+                  className="flex-1"
+                />
+                <Button onClick={handleSaveGlobalFilter} size="sm">
+                  Save
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => setEditingGlobalFilter(false)}>
+                  Cancel
+                </Button>
+              </div>
+            ) : (
+              <p className="text-sm text-purple-800 bg-white/50 rounded px-3 py-2">
+                {globalFilter || <span className="text-purple-400 italic">No global filter set. Click edit to add one.</span>}
+              </p>
+            )}
+          </div>
+
           {/* Add Source Form */}
           <div className="grid gap-4 md:grid-cols-4">
             <div className="space-y-2">
@@ -354,10 +421,10 @@ export default function SuggestionsPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="prompt">Filter Criteria</Label>
+              <Label htmlFor="prompt">Source-Specific Filter <span className="text-gray-400">(optional)</span></Label>
               <Input 
                 id="prompt"
-                placeholder="Remote Python developer roles" 
+                placeholder="Additional filter for this source" 
                 value={newPrompt}
                 onChange={(e) => setNewPrompt(e.target.value)}
               />
@@ -402,11 +469,12 @@ export default function SuggestionsPage() {
                         />
                       </div>
                       <div className="space-y-2">
-                        <Label htmlFor={`edit-prompt-${source.id}`}>Filter Criteria</Label>
+                        <Label htmlFor={`edit-prompt-${source.id}`}>Source-Specific Filter <span className="text-gray-400">(optional)</span></Label>
                         <Input 
                           id={`edit-prompt-${source.id}`}
                           value={editPrompt}
                           onChange={(e) => setEditPrompt(e.target.value)}
+                          placeholder="Leave empty to use global filter only"
                         />
                       </div>
                       <div className="flex items-end gap-2">
@@ -445,7 +513,11 @@ export default function SuggestionsPage() {
                     </div>
                     <div className="text-sm text-gray-500 truncate">{source.url}</div>
                     <div className="text-sm text-gray-400 mt-1">
-                      Filter: {source.filter_prompt}
+                      {source.filter_prompt ? (
+                        <span>Additional filter: <span className="text-gray-600">{source.filter_prompt}</span></span>
+                      ) : (
+                        <span className="italic">Using global filter only</span>
+                      )}
                       {source.last_scraped_at && (
                         <span className="ml-4">
                           Last scan: {new Date(source.last_scraped_at).toLocaleString()}

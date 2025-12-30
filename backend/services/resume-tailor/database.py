@@ -4,12 +4,19 @@ from datetime import datetime
 import os
 
 
+class Settings(SQLModel, table=True):
+    """Key-value store for application settings."""
+    key: str = Field(primary_key=True)
+    value: str
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 class JobSource(SQLModel, table=True):
     """Represents a job board search URL to scan for job listings."""
     id: Optional[int] = Field(default=None, primary_key=True)
     url: str  # The search results page URL
     name: str  # Friendly name for the source (e.g., "LinkedIn - Python Jobs")
-    filter_prompt: str  # AI prompt to filter matching jobs (e.g., "Remote Python developer roles")
+    filter_prompt: Optional[str] = None  # Optional AI prompt specific to this source
     last_scraped_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 

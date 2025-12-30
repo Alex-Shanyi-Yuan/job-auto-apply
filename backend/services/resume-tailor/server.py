@@ -13,7 +13,7 @@ from datetime import datetime
 from sqlmodel import Session, select
 from contextlib import asynccontextmanager
 
-from database import create_db_and_tables, get_session, Job, JobSource, engine
+from database import create_db_and_tables, get_session, Job, JobSource, Settings, engine
 from core import JobParsingAgent, ResumeTailorAgent, JobDiscoveryAgent, JobScoringAgent, compile_pdf
 
 # Configure Logging
@@ -80,7 +80,7 @@ class JobResponse(BaseModel):
 class JobSourceCreate(BaseModel):
     url: str
     name: str
-    filter_prompt: str
+    filter_prompt: Optional[str] = None
 
 
 class JobSourceUpdate(BaseModel):
@@ -93,7 +93,7 @@ class JobSourceResponse(BaseModel):
     id: int
     url: str
     name: str
-    filter_prompt: str
+    filter_prompt: Optional[str] = None
     last_scraped_at: Optional[str] = None
     created_at: str
 
@@ -115,7 +115,48 @@ class ScanStatusResponse(BaseModel):
     error: Optional[str] = None
 
 
+class GlobalFilterResponse(BaseModel):
+    filter_prompt: str
+
+
+class GlobalFilterUpdate(BaseModel):
+    filter_prompt: str
+
+
 # === Helper Functions ===
+
+GLOBAL_FILTER_KEY = "global_filter_prompt"
+
+
+def get_global_filter() -> str:
+    """Get the global filter prompt from settings."""
+    with Session(engine) as session:
+        setting = session.get(Settings, GLOBAL_FILTER_KEY)
+        return setting.value if setting else ""
+
+
+def set_global_filter(value: str) -> None:
+    """Set the global filter prompt in settings."""
+    with Session(engine) as session:
+        setting = session.get(Settings, GLOBAL_FILTER_KEY)
+        if setting:
+            setting.value = value
+            setting.updated_at = datetime.utcnow()
+        else:
+            setting = Settings(key=GLOBAL_FILTER_KEY, value=value)
+        session.add(setting)
+        session.commit()
+
+
+def get_combined_filter(source: JobSource) -> str:
+    """Combine global filter with source-specific filter."""
+    global_filter = get_global_filter()
+    source_filter = source.filter_prompt or ""
+    
+    if global_filter and source_filter:
+        return f"{global_filter}. Additionally: {source_filter}"
+    return global_filter or source_filter or "Any job posting"
+
 
 def load_master_resume(file_path: str) -> str:
     path = Path(file_path)
@@ -274,10 +315,11 @@ async def process_job_discovery():
                         data = response.json()
                         html_content = data["text"]
                     
-                    # 2. Discover jobs using AI
+                    # 2. Discover jobs using AI with combined filter
                     scan_status["current_step"] = "discovering"
-                    discovered_jobs = discovery_agent.discover(html_content, source.filter_prompt)
-                    logger.info(f"Discovered {len(discovered_jobs)} jobs from {source.name}")
+                    combined_filter = get_combined_filter(source)
+                    discovered_jobs = discovery_agent.discover(html_content, combined_filter)
+                    logger.info(f"Discovered {len(discovered_jobs)} jobs from {source.name} (filter: {combined_filter[:50]}...)")
                     scan_status["jobs_found"] += len(discovered_jobs)
                     
                     # 3. Process each discovered job
@@ -412,6 +454,19 @@ def get_job_pdf(job_id: int):
 
 
 # === Job Sources API ===
+
+@app.get("/settings/global-filter", response_model=GlobalFilterResponse)
+def get_global_filter_endpoint():
+    """Get the global filter prompt applied to all sources."""
+    return GlobalFilterResponse(filter_prompt=get_global_filter())
+
+
+@app.put("/settings/global-filter", response_model=GlobalFilterResponse)
+def update_global_filter_endpoint(update: GlobalFilterUpdate):
+    """Update the global filter prompt applied to all sources."""
+    set_global_filter(update.filter_prompt)
+    return GlobalFilterResponse(filter_prompt=update.filter_prompt)
+
 
 @app.post("/sources", response_model=JobSourceResponse)
 def create_source(source: JobSourceCreate):
