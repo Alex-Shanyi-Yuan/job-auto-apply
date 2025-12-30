@@ -20,11 +20,12 @@ class Job(SQLModel, table=True):
     url: str
     company: str
     title: str
-    status: str = "suggested"  # suggested, applied, interviewing, rejected, offer, dismissed
+    status: str = "suggested"  # suggested, applied, interviewing, rejected, offer, dismissed, failed
     requirements: Optional[str] = None  # JSON string of key requirements
     pdf_path: Optional[str] = None
     score: Optional[int] = None  # Match score 0-100
     source_id: Optional[int] = Field(default=None, foreign_key="jobsource.id")
+    error_message: Optional[str] = None  # Error message if processing failed
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 

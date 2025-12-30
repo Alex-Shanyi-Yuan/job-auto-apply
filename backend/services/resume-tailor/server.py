@@ -73,6 +73,7 @@ class JobResponse(BaseModel):
     status: str
     score: Optional[int] = None
     requirements: Optional[List[str]] = None
+    error_message: Optional[str] = None
     created_at: str
 
 
@@ -133,6 +134,7 @@ def job_to_response(job: Job) -> JobResponse:
         status=job.status,
         score=job.score,
         requirements=json.loads(job.requirements) if job.requirements else None,
+        error_message=job.error_message,
         created_at=job.created_at.isoformat()
     )
 
@@ -209,6 +211,7 @@ async def process_application(job_id: int, url: str):
         except Exception as e:
             logger.exception(f"Error processing job {job_id}: {e}")
             job.status = "failed"
+            job.error_message = str(e)
             session.add(job)
             session.commit()
 
@@ -346,13 +349,25 @@ async def process_job_discovery():
 @app.post("/apply", response_model=JobResponse)
 async def apply_job(request: ApplyRequest, background_tasks: BackgroundTasks):
     """Start the application process for a job URL."""
-    # Create initial job record
-    job = Job(url=request.url, company="Pending...", title="Pending...", status="processing")
-    
     with Session(engine) as session:
-        session.add(job)
-        session.commit()
-        session.refresh(job)
+        # Check if job already exists (e.g., from suggestions)
+        existing_job = session.exec(
+            select(Job).where(Job.url == request.url)
+        ).first()
+        
+        if existing_job:
+            # Update existing job to processing status
+            existing_job.status = "processing"
+            session.add(existing_job)
+            session.commit()
+            session.refresh(existing_job)
+            job = existing_job
+        else:
+            # Create new job record
+            job = Job(url=request.url, company="Pending...", title="Pending...", status="processing")
+            session.add(job)
+            session.commit()
+            session.refresh(job)
     
     # Start background processing
     background_tasks.add_task(process_application, job.id, request.url)

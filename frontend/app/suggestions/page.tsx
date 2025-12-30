@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { 
   getSources, createSource, deleteSource, updateSource,
   getSuggestions, refreshSuggestions, applyForJob, dismissJob,
-  getScanStatus,
+  getScanStatus, getJob,
   JobSource, Job, ScanStatus
 } from "@/lib/api";
 
@@ -28,6 +28,9 @@ export default function SuggestionsPage() {
   const [editName, setEditName] = useState("");
   const [editUrl, setEditUrl] = useState("");
   const [editPrompt, setEditPrompt] = useState("");
+  
+  // Apply loading state
+  const [applyingJobId, setApplyingJobId] = useState<number | null>(null);
 
   const loadData = useCallback(async () => {
     try {
@@ -116,12 +119,46 @@ export default function SuggestionsPage() {
   };
 
   const handleApply = async (job: Job) => {
+    setApplyingJobId(job.id);
     try {
-      await applyForJob(job.url);
-      loadData();
+      // Start the application process
+      const appliedJob = await applyForJob(job.url);
+      
+      // Poll for completion - check every 2 seconds until status changes from 'processing'
+      const pollForCompletion = async () => {
+        const maxAttempts = 60; // 2 minutes max
+        for (let i = 0; i < maxAttempts; i++) {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          try {
+            const updatedJob = await getJob(appliedJob.id);
+            if (updatedJob.status !== 'processing') {
+              if (updatedJob.status === 'applied') {
+                // Success - remove from suggestions
+                setSuggestions(prev => prev.filter(j => j.id !== job.id));
+                setError(null);
+              } else if (updatedJob.status === 'failed') {
+                // Show the actual error message from the backend
+                const errorMsg = updatedJob.error_message 
+                  ? `Failed to generate resume for "${job.title}": ${updatedJob.error_message}`
+                  : `Failed to generate resume for "${job.title}"`;
+                setError(errorMsg);
+              }
+              return;
+            }
+          } catch (err) {
+            console.error("Error polling job status", err);
+          }
+        }
+        // Timeout - still processing after 2 minutes
+        setError("Resume generation is taking longer than expected. Check the dashboard for status.");
+      };
+      
+      await pollForCompletion();
     } catch (err) {
       console.error("Failed to apply", err);
       setError("Failed to start application");
+    } finally {
+      setApplyingJobId(null);
     }
   };
 
@@ -490,11 +527,21 @@ export default function SuggestionsPage() {
                       </svg>
                     </a>
                     <div className="flex gap-2">
-                      <Button variant="outline" size="sm" onClick={() => handleDismiss(job.id)}>
+                      <Button variant="outline" size="sm" onClick={() => handleDismiss(job.id)} disabled={applyingJobId === job.id}>
                         Dismiss
                       </Button>
-                      <Button size="sm" onClick={() => handleApply(job)}>
-                        Apply
+                      <Button size="sm" onClick={() => handleApply(job)} disabled={applyingJobId === job.id}>
+                        {applyingJobId === job.id ? (
+                          <>
+                            <svg className="animate-spin -ml-1 mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            Applying...
+                          </>
+                        ) : (
+                          "Apply"
+                        )}
                       </Button>
                     </div>
                   </div>
