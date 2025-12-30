@@ -2,10 +2,12 @@
 
 ## 1. Executive Summary
 
-**AutoCareer** is a self-hosted SaaS platform designed to automate the job search and application process. It aggregates job postings, filters them based on user-defined criteria, uses Large Language Models (LLMs) to tailor application assets (resumes), and tracks the application process via a centralized dashboard.
+**AutoCareer** is a self-hosted SaaS platform designed to automate the job search and application process. It aggregates job postings from configurable sources, uses AI to discover and score relevant jobs, automatically tailors resumes, and tracks the application process via a centralized dashboard.
 
 ### Core Value Proposition
 
+* **AI Job Discovery:** Automatically scan job boards and discover relevant opportunities using Google Gemini.
+* **Smart Job Scoring:** AI-powered relevance scoring (0-100) based on your resume and preferences.
 * **Automated Tailoring:** Rewriting resumes for every single application using Google Gemini Pro.
 * **Application Tracking:** Centralized dashboard for all applied roles.
 * **Privacy-First:** Self-hosted architecture ensures your data stays on your machine.
@@ -21,9 +23,10 @@ We use a **Microservices Architecture** orchestrated by Docker Compose.
 **Port:** `3000`
 
 **Responsibility:**
-* User Interface for Dashboard and Job Details.
-* Triggering backend processes via API calls.
-* Displaying real-time status updates.
+* User Interface for Dashboard, Job Details, and Suggestions.
+* Job Source management (add/edit/delete job boards).
+* Triggering AI job discovery and resume tailoring.
+* Displaying real-time scan status and progress.
 
 ### The "Workers" (Backend Services)
 
@@ -32,7 +35,8 @@ We use a **Microservices Architecture** orchestrated by Docker Compose.
 **Port:** `8000`
 **Responsibility:**
 * **API Server:** Handles requests from Frontend.
-* **Orchestration:** Calls Scraper Service, then invokes LLM Agents.
+* **Job Discovery:** AI-powered discovery of jobs from configured sources.
+* **Job Scoring:** AI-powered relevance scoring against your resume.
 * **Resume Tailoring:** Uses Gemini Pro to rewrite resume sections.
 * **PDF Compilation:** Uses `pdflatex` to generate final PDFs.
 * **Database Management:** CRUD operations on PostgreSQL.
@@ -49,7 +53,7 @@ We use a **Microservices Architecture** orchestrated by Docker Compose.
 **System:** PostgreSQL 15
 **Port:** `5432`
 **Responsibility:**
-* Storing Job Applications, Status, and Metadata.
+* Storing Job Applications, Sources, Settings, and Metadata.
 * Data persistence via Docker Volumes.
 
 ---
@@ -71,33 +75,95 @@ We use a **Microservices Architecture** orchestrated by Docker Compose.
 
 **Technology:** FastAPI + SQLModel + Google Gemini + LaTeX
 
-**Process:**
-1. **Ingest:** Receives `POST /apply` from Frontend.
-2. **Scrape:** Calls Module A to get job text.
-3. **Parse:** Uses LLM to extract "Key Requirements" from job text.
-4. **Tailor:** Uses LLM to rewrite Master Resume based on requirements.
+**Core Processes:**
+
+#### Job Discovery Flow
+1. **Configure Sources:** User adds job board URLs with optional filter prompts.
+2. **Scrape:** Calls Scraper Service to get search result HTML.
+3. **Discover:** `JobDiscoveryAgent` uses AI to extract job listings from HTML.
+4. **Score:** `JobScoringAgent` scores each job (0-100) based on resume fit.
+5. **Save:** Jobs saved with `suggested` status for user review.
+
+#### Resume Tailoring Flow
+1. **Apply:** User clicks "Apply" on a suggested job (or submits URL manually).
+2. **Scrape:** Calls Module A to get full job description.
+3. **Parse:** `JobParsingAgent` extracts requirements from job text.
+4. **Tailor:** `ResumeTailorAgent` rewrites resume sections.
 5. **Compile:** Generates PDF from tailored LaTeX.
-6. **Save:** Updates Database with status and PDF path.
+6. **Save:** Updates database with status and PDF path.
 
 ### Module C: Frontend Dashboard
 
-**Technology:** Next.js + React Query (or `useEffect` polling)
+**Technology:** Next.js + React + Polling
 
-**Process:**
-1. **Dashboard:** Lists all jobs with status badges (Applied, Processing, Failed).
-2. **Job Details:** Shows job metadata, key requirements, and PDF download.
-3. **Polling:** Periodically checks backend for status updates.
+**Pages:**
+1. **Dashboard (`/dashboard`):** Lists all applied jobs with status badges.
+2. **Apply (`/apply`):** Manual URL submission form.
+3. **Suggestions (`/suggestions`):** AI-discovered jobs with source management.
+4. **Job Details (`/jobs/[id]`):** Job metadata, requirements, and PDF download.
 
 ---
 
 ## 4. Data Model (PostgreSQL)
 
-**Table: `job`**
+### Table: `settings`
+| Column | Type | Description |
+| :--- | :--- | :--- |
+| `key` | `String` (PK) | Setting key (e.g., "global_filter") |
+| `value` | `Text` | Setting value |
+| `updated_at` | `DateTime` | Last modified timestamp |
 
+### Table: `jobsource`
+| Column | Type | Description |
+| :--- | :--- | :--- |
+| `id` | `Integer` (PK) | Unique ID |
+| `url` | `String` | Job board search URL |
+| `name` | `String` | Display name |
+| `filter_prompt` | `Text` (Optional) | Source-specific filter criteria |
+| `last_scraped_at` | `DateTime` | Last scan timestamp |
+| `created_at` | `DateTime` | Creation timestamp |
+
+### Table: `job`
 | Column | Type | Description |
 | :--- | :--- | :--- |
 | `id` | `Integer` (PK) | Unique ID |
 | `url` | `String` | Original Job URL |
+| `company` | `String` | Company name |
+| `title` | `String` | Job title |
+| `status` | `Enum` | processing, applied, interviewing, rejected, offer, failed, suggested, dismissed |
+| `score` | `Integer` (Optional) | AI relevance score (0-100) |
+| `requirements` | `JSON` | Extracted requirements list |
+| `error_message` | `String` (Optional) | Error details if failed |
+| `pdf_path` | `String` | Path to generated PDF |
+| `source_id` | `Integer` (FK) | Reference to JobSource |
+| `created_at` | `DateTime` | Creation timestamp |
+
+---
+
+## 5. Access Points
+
+| Service | URL | Purpose |
+| :--- | :--- | :--- |
+| Frontend | http://localhost:3000 | Web UI |
+| Tailor API | http://localhost:8000 | Backend API |
+| Scraper API | http://localhost:8001 | Scraping service |
+| PostgreSQL | localhost:5432 | Database |
+
+---
+
+## 6. Quick Start
+
+```bash
+# Clone and start all services
+git clone https://github.com/Alex-Shanyi-Yuan/job-auto-apply.git
+cd job-auto-apply
+docker-compose up --build
+
+# Open the web UI
+open http://localhost:3000
+```
+
+See [PROJECT_README.md](PROJECT_README.md) for detailed setup instructions.
 | `company` | `String` | Company Name |
 | `title` | `String` | Job Title |
 | `status` | `String` | `processing`, `applied`, `failed` |

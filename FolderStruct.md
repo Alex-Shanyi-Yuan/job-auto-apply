@@ -1,16 +1,17 @@
 # AutoCareer Project Structure
 
-This structure follows a **Monorepo pattern**. It allows you to develop the frontend and backend side-by-side.
+This structure follows a **Monorepo pattern** orchestrated by Docker Compose.
 
 ## Top-Level Directory
 
 ```
-/autocareer-monorepo
+/job-auto-apply
 ├── .gitignore
-├── package.json               # Root scripts (e.g., "dev": "concurrently 'npm run dev:web' 'npm run dev:api'")
-├── README.md
-├── sst.config.ts              # Infrastructure as Code (defines AWS Lambda & Next.js linkage)
-├── .env.local                 # Global Environment Variables (OpenAI Keys, AWS Secrets)
+├── docker-compose.yml         # Orchestrates all services
+├── package.json               # Root scripts
+├── README.md                  # System architecture spec
+├── PROJECT_README.md          # Setup instructions
+├── FolderStruct.md           # This file
 │
 ├── /frontend                  # The "Orchestrator" (Next.js)
 │   └── ... (See Section 1)
@@ -21,87 +22,131 @@ This structure follows a **Monorepo pattern**. It allows you to develop the fron
 
 ## 1. Frontend Structure (Next.js)
 
-Located in `/frontend`. This handles the UI, Auth, and orchestrating calls to the Python backend.
+Located in `/frontend`. Handles the UI and orchestrates calls to the Python backend.
 
 ```
 /frontend
 ├── package.json
-├── next.config.js
+├── next.config.ts
 ├── tsconfig.json
+├── tailwind.config.ts
+├── postcss.config.mjs
 │
 ├── /app                       # Next.js App Router
-│   ├── layout.tsx             # Root layout (Auth providers wrap here)
-│   ├── page.tsx               # Landing page
+│   ├── layout.tsx             # Root layout
+│   ├── page.tsx               # Landing page (redirects to dashboard)
+│   ├── globals.css            # Global styles
 │   │
-│   ├── /dashboard             # User Dashboard (Protected)
-│   │   ├── page.tsx
-│   │   └── /jobs              # Job Tracking View
+│   ├── /dashboard             # Application History
+│   │   └── page.tsx           # Lists applied jobs with status badges
 │   │
-│   └── /api                   # Next.js API Routes
-│       ├── /webhooks          # Stripe Webhooks
-│       └── /cron              # Module A: Job Sourcing (Runs nightly)
-│           └── route.ts
+│   ├── /apply                 # Manual Application
+│   │   └── page.tsx           # URL submission form
+│   │
+│   ├── /suggestions           # AI Job Discovery
+│   │   └── page.tsx           # Source management, job suggestions, scoring
+│   │
+│   └── /jobs
+│       └── /[id]              # Job Details
+│           └── page.tsx       # Requirements, PDF download
 │
 ├── /components                # React UI Components
-│   ├── /ui                    # Shadcn/Tailwind primitives (Buttons, Cards)
-│   └── /features              # Complex components (ResumeUploader, JobCard)
+│   └── /ui                    # shadcn/ui primitives
+│       ├── badge.tsx
+│       ├── button.tsx
+│       ├── card.tsx
+│       ├── input.tsx
+│       ├── label.tsx
+│       └── table.tsx
 │
 ├── /lib                       # Shared Logic
-│   ├── db.ts                  # DynamoDB Client (DocumentClient)
-│   ├── api-client.ts          # Typed fetcher for calling Python Backend
-│   └── types.ts               # Shared Interfaces (match Python output)
+│   ├── api.ts                 # Typed API client for backend
+│   └── utils.ts               # Utility functions
 │
 └── /public                    # Static assets
 ```
 
 ## 2. Backend Structure (Python Microservices)
 
-Located in `/backend`. Split by "Service" to allow different deployment strategies (e.g., Docker for Resume Tailor, Zip for Filter).
+Located in `/backend`. Split by service for independent scaling.
 
 ```
 /backend
 │
-├── /services
-│   │
-│   ├── /resume-tailor         # Module C: The Heavy Lifter
-│   │   ├── Dockerfile         # CRITICAL: Installs Python 3.11 + TeX Live (LaTeX)
-│   │   ├── requirements.txt   # openai, boto3, fastapi, uvicorn
-│   │   ├── main.py            # Local Dev Server (FastAPI)
-│   │   │
-│   │   ├── /core              # Business Logic
-│   │   │   ├── parser.py      # Module 1 (Reads .tex)
-│   │   │   ├── llm.py         # Module 2 (OpenAI/LangChain)
-│   │   │   └── compiler.py    # Module 3 (Subprocess pdflatex)
-│   │   │
-│   │   └── /templates         # LaTeX Master Templates
-│   │       └── master.tex
-│   │
-│   └── /job-filter            # Module B: Lightweight AI Filter
-│       ├── requirements.txt   # lighter deps (no latex)
-│       └── handler.py         # Pure Lambda function
+├── /scripts
+│   └── seed_jobs.py           # Database seeding utility
 │
-└── /scripts                   # Utilities
-    └── seed_jobs.py           # Script to populate DynamoDB with dummy jobs
+└── /services
+    │
+    ├── /resume-tailor         # Main API Service (Port 8000)
+    │   ├── Dockerfile
+    │   ├── requirements.txt
+    │   ├── server.py          # FastAPI server with all endpoints
+    │   ├── database.py        # SQLModel ORM (Settings, JobSource, Job)
+    │   ├── main.py            # CLI entry point (optional)
+    │   ├── spec.md            # API specification
+    │   ├── README.md          # Service documentation
+    │   ├── QUICKSTART.md      # Quick setup guide
+    │   │
+    │   ├── /core              # Business Logic
+    │   │   ├── __init__.py
+    │   │   ├── agents.py      # AI Agents (Discovery, Scoring, Parsing, Tailoring)
+    │   │   ├── jd_scraper.py  # Job description fetching
+    │   │   ├── llm_client.py  # Gemini API integration
+    │   │   ├── models.py      # Pydantic data models
+    │   │   └── latex_compiler.py  # PDF compilation
+    │   │
+    │   ├── /migrations        # Alembic database migrations
+    │   │   ├── env.py
+    │   │   └── /versions
+    │   │       ├── 001_initial.py
+    │   │       ├── 002_add_job_source.py
+    │   │       └── 003_add_settings_table.py
+    │   │
+    │   ├── /data
+    │   │   └── master.tex     # Master resume template
+    │   │
+    │   ├── /output            # Generated PDFs
+    │   │   └── tailored_resume.tex
+    │   │
+    │   └── /templates
+    │       └── master.tex
+    │
+    └── /job-scraper           # Scraper Service (Port 8001)
+        ├── Dockerfile
+        ├── requirements.txt
+        ├── main.py            # FastAPI + Playwright scraper
+        └── README.md
 ```
 
-## 3. Workflow Explanation
+## 3. Docker Services
 
-### Local Development (Phase 1)
+The `docker-compose.yml` orchestrates three services:
 
-You will run two terminals (or one `concurrently` command):
+| Service | Port | Description |
+|---------|------|-------------|
+| `frontend` | 3000 | Next.js web application |
+| `tailor` | 8000 | Resume tailor API (Python + TeX Live) |
+| `scraper` | 8001 | Headless browser scraper (Playwright) |
+| `postgres` | 5432 | PostgreSQL database |
 
-**Terminal A (Frontend):** Runs `next dev` on `localhost:3000`.
+## 4. Key Files
 
-**Terminal B (Backend):** Runs `python backend/services/resume-tailor/main.py` (FastAPI) on `localhost:8000`.
+### Configuration
+- `docker-compose.yml` - Service orchestration
+- `frontend/next.config.ts` - Next.js configuration
+- `backend/services/resume-tailor/.env` - API keys and database URL
 
-**Connection:** In `.env.local`, set `PYTHON_API_URL="http://localhost:8000"`.
+### Database
+- `backend/services/resume-tailor/database.py` - SQLModel models
+- `backend/services/resume-tailor/migrations/` - Alembic migrations
 
-The Next.js API Client sends requests to localhost.
+### AI Agents
+- `backend/services/resume-tailor/core/agents.py` - All AI logic:
+  - `JobDiscoveryAgent` - Extracts jobs from search HTML
+  - `JobScoringAgent` - Scores relevance 0-100
+  - `JobParsingAgent` - Extracts requirements
+  - `ResumeTailorAgent` - Rewrites resume
 
-### Cloud Deployment (Phase 2 - SST)
-
-When you deploy using SST (`npx sst deploy`):
-
-* **Frontend:** SST deploys the Next.js app to AWS (via OpenNext or Amplify)
-* **Backend:** SST builds the Docker image for `resume-tailor`, pushes it to ECR, and creates a Lambda Function URL
-* **Connection:** SST automatically injects the real Lambda URL into the Next.js environment variables
+### Frontend API
+- `frontend/lib/api.ts` - Typed API client with all endpoints

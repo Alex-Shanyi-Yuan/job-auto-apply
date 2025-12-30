@@ -1,36 +1,135 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# AutoCareer Frontend
+
+The web interface for AutoCareer - built with Next.js 14, TypeScript, and shadcn/ui.
+
+## Features
+
+- 📊 **Dashboard** - Track all job applications with status badges
+- 🔍 **Suggestions** - AI-discovered jobs with scoring and source management
+- 📝 **Apply** - Manual URL submission for resume tailoring
+- 📄 **Job Details** - View requirements and download tailored PDFs
+
+## Tech Stack
+
+- **Framework**: Next.js 14 (App Router)
+- **Language**: TypeScript
+- **Styling**: Tailwind CSS
+- **Components**: shadcn/ui
+- **State**: React hooks with polling
 
 ## Getting Started
 
-First, run the development server:
+### Prerequisites
+
+- Node.js 18+
+- Backend services running (see [main README](../README.md))
+
+### Development
 
 ```bash
+# Install dependencies
+npm install
+
+# Start development server
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Production Build
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run build
+npm start
+```
 
-## Learn More
+## Project Structure
 
-To learn more about Next.js, take a look at the following resources:
+```
+frontend/
+├── app/                    # Next.js App Router pages
+│   ├── layout.tsx          # Root layout
+│   ├── page.tsx            # Landing (redirects to dashboard)
+│   ├── dashboard/          # Application history
+│   ├── apply/              # Manual URL submission
+│   ├── suggestions/        # AI job discovery
+│   └── jobs/[id]/          # Job details
+│
+├── components/ui/          # shadcn/ui components
+│   ├── badge.tsx
+│   ├── button.tsx
+│   ├── card.tsx
+│   ├── input.tsx
+│   ├── label.tsx
+│   └── table.tsx
+│
+├── lib/
+│   ├── api.ts              # Backend API client
+│   └── utils.ts            # Utility functions
+│
+└── public/                 # Static assets
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Pages
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### Dashboard (`/dashboard`)
+- Lists all applied jobs
+- Status badges (Processing, Applied, Failed, etc.)
+- Click job to view details
 
-## Deploy on Vercel
+### Suggestions (`/suggestions`)
+- **Global Filter**: Set criteria applied to all sources
+- **Job Sources**: Add/edit/delete job board search URLs
+- **Suggestions List**: AI-scored jobs from all sources
+- **Actions**: Apply or Dismiss each job
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### Apply (`/apply`)
+- Manual job URL submission
+- Triggers resume tailoring workflow
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### Job Details (`/jobs/[id]`)
+- Company and title
+- Extracted requirements
+- PDF download button
+- Error messages if failed
+
+## API Client
+
+The `lib/api.ts` module provides typed functions for all backend endpoints:
+
+```typescript
+// Jobs
+getJobs()
+getJob(id)
+applyForJob(url)
+dismissJob(id)
+
+// Sources
+getSources()
+createSource(name, url, filter?)
+updateSource(id, updates)
+deleteSource(id)
+
+// Suggestions
+getSuggestions()
+refreshSuggestions()
+getScanStatus()
+
+// Settings
+getGlobalFilter()
+updateGlobalFilter(prompt)
+```
+
+## Environment Variables
+
+Create `.env.local`:
+
+```bash
+NEXT_PUBLIC_API_URL=http://localhost:8000
+```
+
+## Related Documentation
+
+- [Main Project README](../README.md)
+- [Backend API Spec](../backend/services/resume-tailor/spec.md)
+- [Project Structure](../FolderStruct.md)
