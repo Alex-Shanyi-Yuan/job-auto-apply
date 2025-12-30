@@ -35,7 +35,7 @@ class GeminiClient:
             )
         
         self.client = genai.Client(api_key=self.api_key)
-        self.model_name = 'gemini-2.5-flash' 
+        self.model_name = 'gemini-3-flash-preview' 
     
     def generate_content(
         self,
