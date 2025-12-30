@@ -24,12 +24,15 @@ COPY . .
 # Create output directory
 RUN mkdir -p output data
 
+# Make entrypoint script executable
+RUN chmod +x entrypoint.sh
+
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 
 # Expose port for FastAPI
 EXPOSE 8000
 
-# Run the FastAPI server
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run the entrypoint script (handles migrations + server start)
+CMD ["./entrypoint.sh"]
 

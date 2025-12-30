@@ -3,23 +3,40 @@ from sqlmodel import Field, SQLModel, create_engine, Session
 from datetime import datetime
 import os
 
+
+class JobSource(SQLModel, table=True):
+    """Represents a job board search URL to scan for job listings."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    url: str  # The search results page URL
+    name: str  # Friendly name for the source (e.g., "LinkedIn - Python Jobs")
+    filter_prompt: str  # AI prompt to filter matching jobs (e.g., "Remote Python developer roles")
+    last_scraped_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 class Job(SQLModel, table=True):
+    """Represents a job application or suggestion."""
     id: Optional[int] = Field(default=None, primary_key=True)
     url: str
     company: str
     title: str
-    status: str = "applied"  # applied, interviewing, rejected, offer
+    status: str = "suggested"  # suggested, applied, interviewing, rejected, offer, dismissed
     requirements: Optional[str] = None  # JSON string of key requirements
     pdf_path: Optional[str] = None
+    score: Optional[int] = None  # Match score 0-100
+    source_id: Optional[int] = Field(default=None, foreign_key="jobsource.id")
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
 
 # Database connection
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@postgres:5432/autocareer")
 
 engine = create_engine(DATABASE_URL)
 
+
 def create_db_and_tables():
     SQLModel.metadata.create_all(engine)
+
 
 def get_session():
     with Session(engine) as session:

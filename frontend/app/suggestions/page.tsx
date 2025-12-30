@@ -1,10 +1,395 @@
+"use client";
+
+import { useState, useEffect, useCallback, useRef } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { 
+  getSources, createSource, deleteSource, 
+  getSuggestions, refreshSuggestions, applyForJob, dismissJob,
+  getScanStatus,
+  JobSource, Job, ScanStatus
+} from "@/lib/api";
+
 export default function SuggestionsPage() {
+  const [sources, setSources] = useState<JobSource[]>([]);
+  const [suggestions, setSuggestions] = useState<Job[]>([]);
+  const [newName, setNewName] = useState("");
+  const [newUrl, setNewUrl] = useState("");
+  const [newPrompt, setNewPrompt] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [scanStatus, setScanStatus] = useState<ScanStatus | null>(null);
+  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  const loadData = useCallback(async () => {
+    try {
+      const [sourcesData, suggestionsData] = await Promise.all([
+        getSources(),
+        getSuggestions()
+      ]);
+      setSources(sourcesData);
+      setSuggestions(suggestionsData);
+      setError(null);
+    } catch (err) {
+      console.error("Failed to load data", err);
+      setError("Failed to load data. Make sure the backend is running.");
+    }
+  }, []);
+
+  const pollScanStatus = useCallback(async () => {
+    try {
+      const status = await getScanStatus();
+      setScanStatus(status);
+      
+      // If scanning is complete, stop polling and refresh data
+      if (!status.is_scanning && pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+        loadData();
+      }
+    } catch (err) {
+      console.error("Failed to fetch scan status", err);
+    }
+  }, [loadData]);
+
+  useEffect(() => {
+    loadData();
+    // Check initial scan status
+    pollScanStatus();
+    
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+    };
+  }, [loadData, pollScanStatus]);
+
+  const handleAddSource = async () => {
+    if (!newName || !newUrl || !newPrompt) {
+      setError("Please fill in all fields");
+      return;
+    }
+    try {
+      await createSource(newName, newUrl, newPrompt);
+      setNewName("");
+      setNewUrl("");
+      setNewPrompt("");
+      setError(null);
+      loadData();
+    } catch (err) {
+      console.error("Failed to add source", err);
+      setError("Failed to add source");
+    }
+  };
+
+  const handleDeleteSource = async (id: number) => {
+    try {
+      await deleteSource(id);
+      loadData();
+    } catch (err) {
+      console.error("Failed to delete source", err);
+    }
+  };
+
+  const handleRefresh = async () => {
+    setError(null);
+    try {
+      await refreshSuggestions();
+      // Start polling for status updates
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+      pollIntervalRef.current = setInterval(pollScanStatus, 1500);
+      pollScanStatus(); // Immediate first poll
+    } catch (err: any) {
+      console.error("Failed to refresh", err);
+      setError(err.message || "Failed to refresh suggestions");
+    }
+  };
+
+  const handleApply = async (job: Job) => {
+    try {
+      await applyForJob(job.url);
+      loadData();
+    } catch (err) {
+      console.error("Failed to apply", err);
+      setError("Failed to start application");
+    }
+  };
+
+  const handleDismiss = async (id: number) => {
+    try {
+      await dismissJob(id);
+      loadData();
+    } catch (err) {
+      console.error("Failed to dismiss", err);
+    }
+  };
+
+  const getScoreBadgeColor = (score: number | undefined) => {
+    if (score === undefined) return "secondary";
+    if (score >= 80) return "default";
+    if (score >= 60) return "secondary";
+    return "outline";
+  };
+
+  const isScanning = scanStatus?.is_scanning ?? false;
+
   return (
-    <div className="text-center py-12">
-      <h1 className="text-2xl font-bold mb-4">Job Suggestions</h1>
-      <p className="text-gray-600 max-w-md mx-auto">
-        This feature is coming soon! We are building a scraper to automatically find jobs that match your profile from various job boards.
-      </p>
+    <div className="container mx-auto py-8 space-y-8">
+      {/* Header */}
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="text-3xl font-bold">Job Suggestions</h1>
+          <p className="text-gray-500 mt-1">
+            Configure job sources and let AI find matching opportunities
+          </p>
+        </div>
+        <Button onClick={handleRefresh} disabled={isScanning} size="lg">
+          {isScanning ? (
+            <>
+              <svg className="animate-spin -ml-1 mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              Scanning...
+            </>
+          ) : (
+            <>
+              <svg className="mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              Scan for Jobs
+            </>
+          )}
+        </Button>
+      </div>
+
+      {/* Error Banner */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-md">
+          {error}
+        </div>
+      )}
+
+      {/* Scan Status Panel */}
+      {isScanning && scanStatus && (
+        <Card className="border-blue-200 bg-blue-50">
+          <CardContent className="pt-6">
+            <div className="space-y-4">
+              <div className="flex items-center gap-3">
+                <svg className="animate-spin h-5 w-5 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <div>
+                  <p className="font-semibold text-blue-900">
+                    {scanStatus.current_source 
+                      ? `Scanning: ${scanStatus.current_source}`
+                      : scanStatus.current_step || "Initializing..."}
+                  </p>
+                  <p className="text-sm text-blue-700">
+                    {scanStatus.current_step && scanStatus.current_source && scanStatus.current_step}
+                  </p>
+                </div>
+              </div>
+              
+              {/* Progress bar */}
+              <div className="w-full bg-blue-200 rounded-full h-2">
+                <div 
+                  className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                  style={{ 
+                    width: scanStatus.total_sources > 0 
+                      ? `${(scanStatus.sources_completed / scanStatus.total_sources) * 100}%` 
+                      : "0%" 
+                  }}
+                />
+              </div>
+              
+              {/* Stats */}
+              <div className="grid grid-cols-4 gap-4 text-center">
+                <div>
+                  <p className="text-2xl font-bold text-blue-900">
+                    {scanStatus.sources_completed}/{scanStatus.total_sources}
+                  </p>
+                  <p className="text-xs text-blue-700">Sources</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-blue-900">{scanStatus.jobs_found}</p>
+                  <p className="text-xs text-blue-700">Jobs Found</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-blue-900">{scanStatus.jobs_scored}</p>
+                  <p className="text-xs text-blue-700">Jobs Scored</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-blue-900">{scanStatus.jobs_added}</p>
+                  <p className="text-xs text-blue-700">New Jobs</p>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Sources Section */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Job Sources</CardTitle>
+          <CardDescription>
+            Add job board search URLs. The AI will scan these pages and extract matching jobs.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          {/* Add Source Form */}
+          <div className="grid gap-4 md:grid-cols-4">
+            <div className="space-y-2">
+              <Label htmlFor="name">Source Name</Label>
+              <Input 
+                id="name"
+                placeholder="e.g., LinkedIn Python Jobs" 
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="url">Search Results URL</Label>
+              <Input 
+                id="url"
+                placeholder="https://linkedin.com/jobs/search?..." 
+                value={newUrl}
+                onChange={(e) => setNewUrl(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="prompt">Filter Criteria</Label>
+              <Input 
+                id="prompt"
+                placeholder="Remote Python developer roles" 
+                value={newPrompt}
+                onChange={(e) => setNewPrompt(e.target.value)}
+              />
+            </div>
+            <div className="flex items-end">
+              <Button onClick={handleAddSource} className="w-full">
+                <svg className="mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                Add Source
+              </Button>
+            </div>
+          </div>
+
+          {/* Sources List */}
+          <div className="space-y-2">
+            {sources.map((source) => {
+              const isCurrentlyScanning = isScanning && scanStatus?.current_source === source.name;
+              return (
+                <div 
+                  key={source.id} 
+                  className={`flex justify-between items-center p-4 rounded-lg border transition-colors ${
+                    isCurrentlyScanning 
+                      ? "bg-blue-50 border-blue-300 ring-2 ring-blue-200" 
+                      : "bg-slate-50"
+                  }`}
+                >
+                  <div className="flex-1 mr-4 min-w-0">
+                    <div className="font-medium flex items-center gap-2">
+                      {source.name}
+                      {isCurrentlyScanning && (
+                        <Badge variant="default" className="bg-blue-600 animate-pulse">
+                          Scanning...
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="text-sm text-gray-500 truncate">{source.url}</div>
+                    <div className="text-sm text-gray-400 mt-1">
+                      Filter: {source.filter_prompt}
+                      {source.last_scraped_at && (
+                        <span className="ml-4">
+                          Last scan: {new Date(source.last_scraped_at).toLocaleString()}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <Button variant="ghost" size="sm" onClick={() => handleDeleteSource(source.id)} disabled={isScanning}>
+                    <svg className="h-4 w-4 text-red-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </Button>
+                </div>
+              );
+            })}
+            {sources.length === 0 && (
+              <div className="text-center text-gray-500 py-8">
+                No sources configured. Add a job board search URL above to get started.
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Suggestions Section */}
+      <div>
+        <h2 className="text-xl font-semibold mb-4">
+          Suggested Jobs ({suggestions.length})
+        </h2>
+        
+        {suggestions.length === 0 ? (
+          <div className="text-center py-12 text-gray-500 bg-slate-50 rounded-lg border">
+            <svg className="mx-auto h-12 w-12 text-gray-400 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+            </svg>
+            <p>No suggestions found yet.</p>
+            <p className="text-sm mt-1">Add sources above and click &quot;Scan for Jobs&quot; to discover opportunities.</p>
+          </div>
+        ) : (
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {suggestions.map((job) => (
+              <Card key={job.id} className="flex flex-col">
+                <CardHeader className="pb-2">
+                  <div className="flex justify-between items-start gap-2">
+                    <CardTitle className="text-lg font-semibold line-clamp-2" title={job.title}>
+                      {job.title}
+                    </CardTitle>
+                    {job.score !== undefined && (
+                      <Badge variant={getScoreBadgeColor(job.score)} className="shrink-0">
+                        {job.score}%
+                      </Badge>
+                    )}
+                  </div>
+                  <CardDescription>{job.company}</CardDescription>
+                </CardHeader>
+                <CardContent className="flex-1 flex flex-col justify-end">
+                  <div className="flex justify-between items-center mt-4 gap-2">
+                    <a 
+                      href={job.url} 
+                      target="_blank" 
+                      rel="noopener noreferrer" 
+                      className="text-sm text-blue-600 hover:underline flex items-center"
+                    >
+                      View Job
+                      <svg className="ml-1 h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                      </svg>
+                    </a>
+                    <div className="flex gap-2">
+                      <Button variant="outline" size="sm" onClick={() => handleDismiss(job.id)}>
+                        Dismiss
+                      </Button>
+                      <Button size="sm" onClick={() => handleApply(job)}>
+                        Apply
+                      </Button>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
