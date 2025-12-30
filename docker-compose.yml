@@ -27,6 +27,7 @@ services:
       - DATABASE_URL=postgresql://user:password@postgres:5432/autocareer
       - SCRAPER_SERVICE_URL=http://scraper:8001
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - DEBUG=true 
     volumes:
       - ./backend/services/resume-tailor/data:/app/data
       - ./backend/services/resume-tailor/output:/app/output

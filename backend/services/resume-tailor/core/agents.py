@@ -48,6 +48,7 @@ class ResumeTailorAgent:
         """
         Tailor the master resume to the provided job posting.
         """
+        # TODO: maybe add a instrecution targeting keyward frequency?
         prompt = f"""You are an expert resume writer and LaTeX specialist with over 20 years of experience.
 
 I will provide you with:

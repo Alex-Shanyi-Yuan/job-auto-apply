@@ -67,7 +67,6 @@ Located in `/backend`. Split by "Service" to allow different deployment strategi
 │   │   ├── Dockerfile         # CRITICAL: Installs Python 3.11 + TeX Live (LaTeX)
 │   │   ├── requirements.txt   # openai, boto3, fastapi, uvicorn
 │   │   ├── main.py            # Local Dev Server (FastAPI)
-│   │   ├── lambda_handler.py  # Production Entrypoint (AWS Lambda)
 │   │   │
 │   │   ├── /core              # Business Logic
 │   │   │   ├── parser.py      # Module 1 (Reads .tex)
