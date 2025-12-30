@@ -82,6 +82,12 @@ class JobSourceCreate(BaseModel):
     filter_prompt: str
 
 
+class JobSourceUpdate(BaseModel):
+    url: Optional[str] = None
+    name: Optional[str] = None
+    filter_prompt: Optional[str] = None
+
+
 class JobSourceResponse(BaseModel):
     id: int
     url: str
@@ -413,6 +419,27 @@ def list_sources():
     with Session(engine) as session:
         sources = session.exec(select(JobSource).order_by(JobSource.created_at.desc())).all()
         return [source_to_response(s) for s in sources]
+
+
+@app.put("/sources/{source_id}", response_model=JobSourceResponse)
+def update_source(source_id: int, updates: JobSourceUpdate):
+    """Update a job source."""
+    with Session(engine) as session:
+        source = session.get(JobSource, source_id)
+        if not source:
+            raise HTTPException(status_code=404, detail="Source not found")
+        
+        if updates.url is not None:
+            source.url = updates.url
+        if updates.name is not None:
+            source.name = updates.name
+        if updates.filter_prompt is not None:
+            source.filter_prompt = updates.filter_prompt
+        
+        session.add(source)
+        session.commit()
+        session.refresh(source)
+        return source_to_response(source)
 
 
 @app.delete("/sources/{source_id}")

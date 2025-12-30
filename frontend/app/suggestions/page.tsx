@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { 
-  getSources, createSource, deleteSource, 
+  getSources, createSource, deleteSource, updateSource,
   getSuggestions, refreshSuggestions, applyForJob, dismissJob,
   getScanStatus,
   JobSource, Job, ScanStatus
@@ -22,6 +22,12 @@ export default function SuggestionsPage() {
   const [error, setError] = useState<string | null>(null);
   const [scanStatus, setScanStatus] = useState<ScanStatus | null>(null);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Edit mode state
+  const [editingSourceId, setEditingSourceId] = useState<number | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editUrl, setEditUrl] = useState("");
+  const [editPrompt, setEditPrompt] = useState("");
 
   const loadData = useCallback(async () => {
     try {
@@ -125,6 +131,40 @@ export default function SuggestionsPage() {
       loadData();
     } catch (err) {
       console.error("Failed to dismiss", err);
+    }
+  };
+
+  const startEditing = (source: JobSource) => {
+    setEditingSourceId(source.id);
+    setEditName(source.name);
+    setEditUrl(source.url);
+    setEditPrompt(source.filter_prompt);
+  };
+
+  const cancelEditing = () => {
+    setEditingSourceId(null);
+    setEditName("");
+    setEditUrl("");
+    setEditPrompt("");
+  };
+
+  const handleUpdateSource = async () => {
+    if (!editingSourceId || !editName || !editUrl || !editPrompt) {
+      setError("Please fill in all fields");
+      return;
+    }
+    try {
+      await updateSource(editingSourceId, {
+        name: editName,
+        url: editUrl,
+        filter_prompt: editPrompt,
+      });
+      cancelEditing();
+      setError(null);
+      loadData();
+    } catch (err) {
+      console.error("Failed to update source", err);
+      setError("Failed to update source");
     }
   };
 
@@ -286,6 +326,55 @@ export default function SuggestionsPage() {
           <div className="space-y-2">
             {sources.map((source) => {
               const isCurrentlyScanning = isScanning && scanStatus?.current_source === source.name;
+              const isEditing = editingSourceId === source.id;
+              
+              if (isEditing) {
+                return (
+                  <div 
+                    key={source.id} 
+                    className="p-4 rounded-lg border bg-amber-50 border-amber-200"
+                  >
+                    <div className="grid gap-4 md:grid-cols-4">
+                      <div className="space-y-2">
+                        <Label htmlFor={`edit-name-${source.id}`}>Source Name</Label>
+                        <Input 
+                          id={`edit-name-${source.id}`}
+                          value={editName}
+                          onChange={(e) => setEditName(e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor={`edit-url-${source.id}`}>Search Results URL</Label>
+                        <Input 
+                          id={`edit-url-${source.id}`}
+                          value={editUrl}
+                          onChange={(e) => setEditUrl(e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor={`edit-prompt-${source.id}`}>Filter Criteria</Label>
+                        <Input 
+                          id={`edit-prompt-${source.id}`}
+                          value={editPrompt}
+                          onChange={(e) => setEditPrompt(e.target.value)}
+                        />
+                      </div>
+                      <div className="flex items-end gap-2">
+                        <Button onClick={handleUpdateSource} className="flex-1">
+                          <svg className="mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                          Save
+                        </Button>
+                        <Button variant="outline" onClick={cancelEditing}>
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              }
+              
               return (
                 <div 
                   key={source.id} 
@@ -314,11 +403,30 @@ export default function SuggestionsPage() {
                       )}
                     </div>
                   </div>
-                  <Button variant="ghost" size="sm" onClick={() => handleDeleteSource(source.id)} disabled={isScanning}>
-                    <svg className="h-4 w-4 text-red-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                    </svg>
-                  </Button>
+                  <div className="flex gap-1">
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      onClick={() => startEditing(source)} 
+                      disabled={isScanning}
+                      title="Edit source"
+                    >
+                      <svg className="h-4 w-4 text-gray-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                      </svg>
+                    </Button>
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      onClick={() => handleDeleteSource(source.id)} 
+                      disabled={isScanning}
+                      title="Delete source"
+                    >
+                      <svg className="h-4 w-4 text-red-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </Button>
+                  </div>
                 </div>
               );
             })}
