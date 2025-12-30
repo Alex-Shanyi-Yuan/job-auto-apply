@@ -7,7 +7,7 @@ until python -c "
 import os
 import sys
 from sqlalchemy import create_engine
-engine = create_engine(os.getenv('DATABASE_URL', 'postgresql://user:passwo∏rd@postgres:5432/autocareer'))
+engine = create_engine(os.getenv('DATABASE_URL', 'postgresql://user:password@postgres:5432/autocareer'))
 try:
     conn = engine.connect()
     conn.close()
