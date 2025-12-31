@@ -46,6 +46,9 @@ export default function SuggestionsPage() {
   
   // Collapsible sources section
   const [sourcesExpanded, setSourcesExpanded] = useState(true);
+  
+  // Track if we've started polling (to auto-resume on page load)
+  const [pollingStarted, setPollingStarted] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
@@ -69,6 +72,11 @@ export default function SuggestionsPage() {
       const status = await getScanStatus();
       setScanStatus(status);
       
+      // Store last scan results if available (for "View Last Report" button)
+      if (status.source_results && status.source_results.length > 0) {
+        setScanReport(status.source_results);
+      }
+      
       // If scanning is complete, stop polling and refresh data
       if (!status.is_scanning && pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
@@ -76,7 +84,6 @@ export default function SuggestionsPage() {
         
         // Show scan report if there are results
         if (status.source_results && status.source_results.length > 0) {
-          setScanReport(status.source_results);
           setShowScanReport(true);
         }
         
@@ -88,10 +95,32 @@ export default function SuggestionsPage() {
     }
   }, [loadData]);
 
+  // Initial load and check if scan is in progress (for page refresh during scan)
   useEffect(() => {
     loadData();
-    // Check initial scan status
-    pollScanStatus();
+    
+    // Check initial scan status and auto-resume polling if scan is in progress
+    const checkAndResumeScan = async () => {
+      try {
+        const status = await getScanStatus();
+        setScanStatus(status);
+        
+        // Store any existing scan results for "View Last Report"
+        if (status.source_results && status.source_results.length > 0) {
+          setScanReport(status.source_results);
+        }
+        
+        // If a scan is in progress, start polling
+        if (status.is_scanning && !pollIntervalRef.current) {
+          setPollingStarted(true);
+          pollIntervalRef.current = setInterval(pollScanStatus, 1500);
+        }
+      } catch (err) {
+        console.error("Failed to check initial scan status", err);
+      }
+    };
+    
+    checkAndResumeScan();
     
     return () => {
       if (pollIntervalRef.current) {
@@ -308,6 +337,19 @@ export default function SuggestionsPage() {
           </p>
         </div>
         <div className="flex gap-2">
+          {/* View Last Report button - only show when not scanning and has results */}
+          {!isScanning && scanReport.length > 0 && (
+            <Button 
+              onClick={() => setShowScanReport(true)} 
+              variant="outline"
+              size="lg"
+            >
+              <svg className="mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              View Last Report
+            </Button>
+          )}
           {selectedSourceIds.size > 0 && (
             <Button 
               onClick={handleScanSelected} 
