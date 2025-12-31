@@ -56,6 +56,7 @@ scan_status = {
     "jobs_scored": 0,
     "current_step": None,  # "scraping", "discovering", "scoring"
     "error": None,
+    "source_results": [],  # Per-source scan results for report
 }
 
 
@@ -98,9 +99,33 @@ class JobSourceResponse(BaseModel):
     created_at: str
 
 
+class RefreshRequest(BaseModel):
+    source_ids: Optional[List[int]] = None  # If None, scan all sources
+
+
 class RefreshResponse(BaseModel):
     message: str
     sources_count: int
+
+
+class JobInfo(BaseModel):
+    id: Optional[int] = None
+    title: str
+    company: str
+    url: str
+    score: Optional[int] = None
+
+
+class SourceScanResult(BaseModel):
+    source_id: int
+    source_name: str
+    source_url: str
+    jobs_found: int
+    jobs_added: int
+    jobs_skipped: int  # Already existed in DB
+    added_jobs: List[JobInfo] = []  # Details of newly added jobs
+    skipped_jobs: List[JobInfo] = []  # Details of jobs that already existed
+    error: Optional[str] = None
 
 
 class ScanStatusResponse(BaseModel):
@@ -113,6 +138,7 @@ class ScanStatusResponse(BaseModel):
     jobs_scored: int
     current_step: Optional[str] = None
     error: Optional[str] = None
+    source_results: List[SourceScanResult] = []
 
 
 class GlobalFilterResponse(BaseModel):
@@ -257,10 +283,14 @@ async def process_application(job_id: int, url: str):
             session.commit()
 
 
-async def process_job_discovery():
-    """Background task to discover and score jobs from all sources."""
+async def process_job_discovery(source_ids: Optional[List[int]] = None):
+    """Background task to discover and score jobs from selected sources.
+    
+    Args:
+        source_ids: Optional list of source IDs to scan. If None, scan all sources.
+    """
     global scan_status
-    logger.info("Starting job discovery process...")
+    logger.info(f"Starting job discovery process... (source_ids={source_ids})")
     
     # Reset scan status
     scan_status = {
@@ -273,14 +303,21 @@ async def process_job_discovery():
         "jobs_scored": 0,
         "current_step": "initializing",
         "error": None,
+        "source_results": [],
     }
     
     try:
         with Session(engine) as session:
-            sources = session.exec(select(JobSource)).all()
+            # Get sources - either specific ones or all
+            if source_ids:
+                sources = session.exec(
+                    select(JobSource).where(JobSource.id.in_(source_ids))
+                ).all()
+            else:
+                sources = session.exec(select(JobSource)).all()
             
             if not sources:
-                logger.info("No job sources configured")
+                logger.info("No job sources to scan")
                 scan_status["is_scanning"] = False
                 scan_status["current_step"] = "completed"
                 return
@@ -303,6 +340,19 @@ async def process_job_discovery():
                 scan_status["current_step"] = "scraping"
                 logger.info(f"Processing source: {source.name} ({source.url})")
                 
+                # Initialize per-source result tracking
+                source_result = {
+                    "source_id": source.id,
+                    "source_name": source.name,
+                    "source_url": source.url,
+                    "jobs_found": 0,
+                    "jobs_added": 0,
+                    "jobs_skipped": 0,
+                    "added_jobs": [],
+                    "skipped_jobs": [],
+                    "error": None,
+                }
+                
                 try:
                     # 1. Scrape the search results page (HTML format)
                     async with httpx.AsyncClient() as client:
@@ -320,15 +370,24 @@ async def process_job_discovery():
                     combined_filter = get_combined_filter(source)
                     discovered_jobs = discovery_agent.discover(html_content, combined_filter)
                     logger.info(f"Discovered {len(discovered_jobs)} jobs from {source.name} (filter: {combined_filter[:50]}...)")
+                    
+                    source_result["jobs_found"] = len(discovered_jobs)
                     scan_status["jobs_found"] += len(discovered_jobs)
                     
                     # 3. Process each discovered job
-                    new_jobs_count = 0
                     for dj in discovered_jobs:
                         # Check if job already exists (by URL)
                         existing = session.exec(select(Job).where(Job.url == dj.url)).first()
                         if existing:
                             logger.debug(f"Job already exists: {dj.url}")
+                            source_result["jobs_skipped"] += 1
+                            source_result["skipped_jobs"].append({
+                                "id": existing.id,
+                                "title": existing.title,
+                                "company": existing.company,
+                                "url": existing.url,
+                                "score": existing.score,
+                            })
                             continue
                         
                         # Rate limiting - wait before scraping job details
@@ -366,7 +425,15 @@ async def process_job_discovery():
                             source_id=source.id
                         )
                         session.add(new_job)
-                        new_jobs_count += 1
+                        session.flush()  # Get the ID
+                        source_result["jobs_added"] += 1
+                        source_result["added_jobs"].append({
+                            "id": new_job.id,
+                            "title": new_job.title,
+                            "company": new_job.company,
+                            "url": new_job.url,
+                            "score": score,
+                        })
                     
                     # Update source last_scraped_at
                     source.last_scraped_at = datetime.utcnow()
@@ -374,12 +441,15 @@ async def process_job_discovery():
                     session.commit()
                     
                     scan_status["sources_completed"] += 1
-                    logger.info(f"Added {new_jobs_count} new jobs from {source.name}")
+                    logger.info(f"Source '{source.name}': found={source_result['jobs_found']}, added={source_result['jobs_added']}, skipped={source_result['jobs_skipped']}")
                     
                 except Exception as e:
                     logger.exception(f"Error processing source {source.name}: {e}")
+                    source_result["error"] = str(e)
                     scan_status["error"] = f"Error processing {source.name}: {str(e)}"
-                    continue
+                
+                # Add source result to list
+                scan_status["source_results"].append(source_result)
         
         logger.info("Job discovery process completed")
     
@@ -539,18 +609,36 @@ def list_suggestions():
 
 
 @app.post("/suggestions/refresh", response_model=RefreshResponse)
-async def refresh_suggestions(background_tasks: BackgroundTasks):
-    """Trigger job discovery from all configured sources."""
+async def refresh_suggestions(
+    background_tasks: BackgroundTasks,
+    request: Optional[RefreshRequest] = None
+):
+    """Trigger job discovery from selected sources.
+    
+    If source_ids is provided, only scan those sources.
+    If source_ids is None or empty, scan all sources.
+    """
     with Session(engine) as session:
-        sources_count = len(session.exec(select(JobSource)).all())
+        if request and request.source_ids:
+            # Scan only selected sources
+            sources = session.exec(
+                select(JobSource).where(JobSource.id.in_(request.source_ids))
+            ).all()
+            sources_count = len(sources)
+            if sources_count == 0:
+                raise HTTPException(status_code=400, detail="No valid sources found for the given IDs.")
+            source_ids = request.source_ids
+        else:
+            # Scan all sources
+            sources_count = len(session.exec(select(JobSource)).all())
+            if sources_count == 0:
+                raise HTTPException(status_code=400, detail="No job sources configured. Add a source first.")
+            source_ids = None
     
-    if sources_count == 0:
-        raise HTTPException(status_code=400, detail="No job sources configured. Add a source first.")
-    
-    background_tasks.add_task(process_job_discovery)
+    background_tasks.add_task(process_job_discovery, source_ids)
     
     return RefreshResponse(
-        message="Job discovery started in background",
+        message=f"Job discovery started for {sources_count} source(s)",
         sources_count=sources_count
     )
 

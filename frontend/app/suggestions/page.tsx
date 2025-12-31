@@ -10,7 +10,7 @@ import {
   getSources, createSource, deleteSource, updateSource,
   getSuggestions, refreshSuggestions, applyForJob, dismissJob,
   getScanStatus, getJob, getGlobalFilter, updateGlobalFilter,
-  JobSource, Job, ScanStatus
+  JobSource, Job, ScanStatus, SourceScanResult
 } from "@/lib/api";
 
 export default function SuggestionsPage() {
@@ -36,6 +36,13 @@ export default function SuggestionsPage() {
   
   // Apply loading state - track multiple jobs being applied to
   const [applyingJobIds, setApplyingJobIds] = useState<Set<number>>(new Set());
+  
+  // Multi-select sources for scanning
+  const [selectedSourceIds, setSelectedSourceIds] = useState<Set<number>>(new Set());
+  
+  // Scan report modal state
+  const [showScanReport, setShowScanReport] = useState(false);
+  const [scanReport, setScanReport] = useState<SourceScanResult[]>([]);
 
   const loadData = useCallback(async () => {
     try {
@@ -63,7 +70,15 @@ export default function SuggestionsPage() {
       if (!status.is_scanning && pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
         pollIntervalRef.current = null;
+        
+        // Show scan report if there are results
+        if (status.source_results && status.source_results.length > 0) {
+          setScanReport(status.source_results);
+          setShowScanReport(true);
+        }
+        
         loadData();
+        setSelectedSourceIds(new Set()); // Clear selection after scan
       }
     } catch (err) {
       console.error("Failed to fetch scan status", err);
@@ -126,10 +141,10 @@ export default function SuggestionsPage() {
     }
   };
 
-  const handleRefresh = async () => {
+  const handleRefresh = async (sourceIds?: number[]) => {
     setError(null);
     try {
-      await refreshSuggestions();
+      await refreshSuggestions(sourceIds);
       // Start polling for status updates
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
@@ -139,6 +154,34 @@ export default function SuggestionsPage() {
     } catch (err: any) {
       console.error("Failed to refresh", err);
       setError(err.message || "Failed to refresh suggestions");
+    }
+  };
+
+  const handleScanSelected = async () => {
+    if (selectedSourceIds.size === 0) {
+      setError("Please select at least one source to scan");
+      return;
+    }
+    await handleRefresh(Array.from(selectedSourceIds));
+  };
+
+  const toggleSourceSelection = (sourceId: number) => {
+    setSelectedSourceIds(prev => {
+      const next = new Set(prev);
+      if (next.has(sourceId)) {
+        next.delete(sourceId);
+      } else {
+        next.add(sourceId);
+      }
+      return next;
+    });
+  };
+
+  const toggleAllSources = () => {
+    if (selectedSourceIds.size === sources.length) {
+      setSelectedSourceIds(new Set());
+    } else {
+      setSelectedSourceIds(new Set(sources.map(s => s.id)));
     }
   };
 
@@ -261,24 +304,51 @@ export default function SuggestionsPage() {
             Configure job sources and let AI find matching opportunities
           </p>
         </div>
-        <Button onClick={handleRefresh} disabled={isScanning} size="lg">
-          {isScanning ? (
-            <>
-              <svg className="animate-spin -ml-1 mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-              </svg>
-              Scanning...
-            </>
-          ) : (
-            <>
-              <svg className="mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-              Scan for Jobs
-            </>
+        <div className="flex gap-2">
+          {selectedSourceIds.size > 0 && (
+            <Button 
+              onClick={handleScanSelected} 
+              disabled={isScanning} 
+              variant="outline"
+              size="lg"
+            >
+              {isScanning ? (
+                <>
+                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Scanning...
+                </>
+              ) : (
+                <>
+                  <svg className="mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                  </svg>
+                  Scan Selected ({selectedSourceIds.size})
+                </>
+              )}
+            </Button>
           )}
-        </Button>
+          <Button onClick={() => handleRefresh()} disabled={isScanning} size="lg">
+            {isScanning ? (
+              <>
+                <svg className="animate-spin -ml-1 mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Scanning...
+              </>
+            ) : (
+              <>
+                <svg className="mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Scan All
+              </>
+            )}
+          </Button>
+        </div>
       </div>
 
       {/* Error Banner */}
@@ -441,6 +511,23 @@ export default function SuggestionsPage() {
 
           {/* Sources List */}
           <div className="space-y-2">
+            {/* Select All Header */}
+            {sources.length > 0 && (
+              <div className="flex items-center gap-2 px-4 py-2 text-sm text-gray-600">
+                <input
+                  type="checkbox"
+                  checked={sources.length > 0 && selectedSourceIds.size === sources.length}
+                  onChange={toggleAllSources}
+                  disabled={isScanning}
+                  className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-50"
+                />
+                <span>
+                  {selectedSourceIds.size === sources.length 
+                    ? "Deselect All" 
+                    : `Select All (${sources.length})`}
+                </span>
+              </div>
+            )}
             {sources.map((source) => {
               const isCurrentlyScanning = isScanning && scanStatus?.current_source === source.name;
               const isEditing = editingSourceId === source.id;
@@ -499,30 +586,42 @@ export default function SuggestionsPage() {
                   className={`flex justify-between items-center p-4 rounded-lg border transition-colors ${
                     isCurrentlyScanning 
                       ? "bg-blue-50 border-blue-300 ring-2 ring-blue-200" 
+                      : selectedSourceIds.has(source.id)
+                      ? "bg-indigo-50 border-indigo-300"
                       : "bg-slate-50"
                   }`}
                 >
-                  <div className="flex-1 mr-4 min-w-0">
-                    <div className="font-medium flex items-center gap-2">
-                      {source.name}
-                      {isCurrentlyScanning && (
-                        <Badge variant="default" className="bg-blue-600 animate-pulse">
-                          Scanning...
-                        </Badge>
-                      )}
-                    </div>
-                    <div className="text-sm text-gray-500 truncate">{source.url}</div>
-                    <div className="text-sm text-gray-400 mt-1">
-                      {source.filter_prompt ? (
-                        <span>Additional filter: <span className="text-gray-600">{source.filter_prompt}</span></span>
-                      ) : (
-                        <span className="italic">Using global filter only</span>
-                      )}
-                      {source.last_scraped_at && (
-                        <span className="ml-4">
-                          Last scan: {new Date(source.last_scraped_at).toLocaleString()}
-                        </span>
-                      )}
+                  <div className="flex items-center gap-3 flex-1 mr-4 min-w-0">
+                    {/* Checkbox for selection */}
+                    <input
+                      type="checkbox"
+                      checked={selectedSourceIds.has(source.id)}
+                      onChange={() => toggleSourceSelection(source.id)}
+                      disabled={isScanning}
+                      className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-50"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium flex items-center gap-2">
+                        {source.name}
+                        {isCurrentlyScanning && (
+                          <Badge variant="default" className="bg-blue-600 animate-pulse">
+                            Scanning...
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="text-sm text-gray-500 truncate">{source.url}</div>
+                      <div className="text-sm text-gray-400 mt-1">
+                        {source.filter_prompt ? (
+                          <span>Additional filter: <span className="text-gray-600">{source.filter_prompt}</span></span>
+                        ) : (
+                          <span className="italic">Using global filter only</span>
+                        )}
+                        {source.last_scraped_at && (
+                          <span className="ml-4">
+                            Last scan: {new Date(source.last_scraped_at).toLocaleString()}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
                   <div className="flex gap-1">
@@ -635,6 +734,211 @@ export default function SuggestionsPage() {
           </div>
         )}
       </div>
+
+      {/* Scan Report Modal */}
+      {showScanReport && scanReport && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full mx-4 max-h-[85vh] flex flex-col">
+            <div className="p-6 border-b">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-semibold">Scan Report</h2>
+                <Button variant="ghost" size="sm" onClick={() => setShowScanReport(false)}>
+                  <svg className="h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </Button>
+              </div>
+              <p className="text-sm text-gray-500 mt-1">Summary of the last scan operation</p>
+            </div>
+            <div className="flex-1 overflow-auto p-6">
+              {scanReport.length === 0 ? (
+                <div className="text-center text-gray-500 py-8">
+                  No sources were scanned.
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {/* Summary Stats */}
+                  <div className="grid grid-cols-3 gap-4 mb-6">
+                    <div className="bg-blue-50 rounded-lg p-4 text-center">
+                      <div className="text-2xl font-bold text-blue-700">
+                        {scanReport.reduce((sum, r) => sum + r.jobs_found, 0)}
+                      </div>
+                      <div className="text-sm text-blue-600">Jobs Found</div>
+                    </div>
+                    <div className="bg-green-50 rounded-lg p-4 text-center">
+                      <div className="text-2xl font-bold text-green-700">
+                        {scanReport.reduce((sum, r) => sum + r.jobs_added, 0)}
+                      </div>
+                      <div className="text-sm text-green-600">New Jobs Added</div>
+                    </div>
+                    <div className="bg-gray-50 rounded-lg p-4 text-center">
+                      <div className="text-2xl font-bold text-gray-700">
+                        {scanReport.reduce((sum, r) => sum + r.jobs_skipped, 0)}
+                      </div>
+                      <div className="text-sm text-gray-600">Already Existed</div>
+                    </div>
+                  </div>
+
+                  {/* Per-Source Results */}
+                  <div className="space-y-4">
+                    <h3 className="font-medium text-gray-700">Per-Source Results</h3>
+                    {scanReport.map((result, index) => (
+                      <div 
+                        key={index} 
+                        className={`rounded-lg border ${
+                          result.error 
+                            ? "bg-red-50 border-red-200" 
+                            : result.jobs_added > 0 
+                            ? "bg-green-50 border-green-200"
+                            : "bg-gray-50 border-gray-200"
+                        }`}
+                      >
+                        {/* Source Header */}
+                        <div className="p-4 border-b border-inherit">
+                          <div className="flex items-center justify-between">
+                            <div className="font-medium">{result.source_name}</div>
+                            <div className="flex items-center gap-2">
+                              {result.error ? (
+                                <Badge variant="destructive">Error</Badge>
+                              ) : result.jobs_added > 0 ? (
+                                <Badge className="bg-green-600">+{result.jobs_added} new</Badge>
+                              ) : (
+                                <Badge variant="secondary">No new jobs</Badge>
+                              )}
+                              <a 
+                                href={result.source_url} 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                className="text-blue-600 hover:text-blue-800"
+                                title="Open source URL"
+                              >
+                                <svg className="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                                </svg>
+                              </a>
+                            </div>
+                          </div>
+                          {result.error ? (
+                            <div className="text-sm text-red-600 mt-2">{result.error}</div>
+                          ) : (
+                            <div className="text-sm text-gray-500 mt-2 flex gap-4">
+                              <span>Found: {result.jobs_found}</span>
+                              <span>Added: {result.jobs_added}</span>
+                              <span>Skipped: {result.jobs_skipped}</span>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Job Lists */}
+                        {!result.error && (result.added_jobs?.length > 0 || result.skipped_jobs?.length > 0) && (
+                          <div className="p-4 space-y-4">
+                            {/* Added Jobs */}
+                            {result.added_jobs?.length > 0 && (
+                              <div>
+                                <div className="text-sm font-medium text-green-700 mb-2 flex items-center gap-1">
+                                  <svg className="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                                  </svg>
+                                  New Jobs Added ({result.added_jobs.length})
+                                </div>
+                                <div className="space-y-1 max-h-32 overflow-y-auto">
+                                  {result.added_jobs.map((job, jobIndex) => (
+                                    <div key={jobIndex} className="flex items-center justify-between text-sm bg-white/50 rounded px-2 py-1">
+                                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                                        <span className="truncate" title={job.title}>{job.title}</span>
+                                        <span className="text-gray-400 text-xs shrink-0">@ {job.company}</span>
+                                        {job.score !== null && (
+                                          <Badge 
+                                            variant="outline" 
+                                            className={`text-xs shrink-0 ${
+                                              job.score >= 70 ? "border-green-500 text-green-700" :
+                                              job.score >= 50 ? "border-yellow-500 text-yellow-700" :
+                                              job.score >= 30 ? "border-orange-500 text-orange-700" :
+                                              "border-red-500 text-red-700"
+                                            }`}
+                                          >
+                                            {job.score}
+                                          </Badge>
+                                        )}
+                                      </div>
+                                      <a 
+                                        href={job.url} 
+                                        target="_blank" 
+                                        rel="noopener noreferrer"
+                                        className="text-blue-600 hover:text-blue-800 shrink-0 ml-2"
+                                        title="View job posting"
+                                      >
+                                        <svg className="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                                        </svg>
+                                      </a>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Skipped Jobs */}
+                            {result.skipped_jobs?.length > 0 && (
+                              <div>
+                                <div className="text-sm font-medium text-gray-500 mb-2 flex items-center gap-1">
+                                  <svg className="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                  </svg>
+                                  Already Existed ({result.skipped_jobs.length})
+                                </div>
+                                <div className="space-y-1 max-h-24 overflow-y-auto">
+                                  {result.skipped_jobs.map((job, jobIndex) => (
+                                    <div key={jobIndex} className="flex items-center justify-between text-sm bg-white/30 rounded px-2 py-1 text-gray-600">
+                                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                                        <span className="truncate" title={job.title}>{job.title}</span>
+                                        <span className="text-gray-400 text-xs shrink-0">@ {job.company}</span>
+                                        {job.score !== null && (
+                                          <Badge 
+                                            variant="outline" 
+                                            className={`text-xs shrink-0 ${
+                                              job.score >= 70 ? "border-green-500 text-green-700" :
+                                              job.score >= 50 ? "border-yellow-500 text-yellow-700" :
+                                              job.score >= 30 ? "border-orange-500 text-orange-700" :
+                                              "border-red-500 text-red-700"
+                                            }`}
+                                          >
+                                            {job.score}
+                                          </Badge>
+                                        )}
+                                      </div>
+                                      <a 
+                                        href={job.url} 
+                                        target="_blank" 
+                                        rel="noopener noreferrer"
+                                        className="text-blue-600 hover:text-blue-800 shrink-0 ml-2"
+                                        title="View job posting"
+                                      >
+                                        <svg className="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                                        </svg>
+                                      </a>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="p-4 border-t bg-gray-50 rounded-b-lg">
+              <Button onClick={() => setShowScanReport(false)} className="w-full">
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
