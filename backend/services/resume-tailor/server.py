@@ -400,6 +400,19 @@ async def process_single_source(
                         with scan_status_lock:
                             scan_status["jobs_scored"] += 1
                         logger.info(f"Scored job '{dj.title}': {score}/100 - {job_score.reasoning}")
+                        
+                        # Skip jobs with score under 50%
+                        if score is not None and score < 50:
+                            logger.info(f"Skipping low-score job '{dj.title}' (score: {score}/100)")
+                            source_result["jobs_skipped"] += 1
+                            source_result["skipped_jobs"].append({
+                                "id": None,
+                                "title": dj.title,
+                                "company": dj.company,
+                                "url": dj.url,
+                                "score": score,
+                            })
+                            continue
                     except Exception as e:
                         logger.warning(f"Failed to score job {dj.url}: {e}")
                 
