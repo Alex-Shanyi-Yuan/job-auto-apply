@@ -43,6 +43,9 @@ export default function SuggestionsPage() {
   // Scan report modal state
   const [showScanReport, setShowScanReport] = useState(false);
   const [scanReport, setScanReport] = useState<SourceScanResult[]>([]);
+  
+  // Collapsible sources section
+  const [sourcesExpanded, setSourcesExpanded] = useState(true);
 
   const loadData = useCallback(async () => {
     try {
@@ -370,12 +373,19 @@ export default function SuggestionsPage() {
                 </svg>
                 <div>
                   <p className="font-semibold text-blue-900">
-                    {scanStatus.current_source 
-                      ? `Scanning: ${scanStatus.current_source}`
-                      : scanStatus.current_step || "Initializing..."}
+                    {scanStatus.active_sources && scanStatus.active_sources.length > 0
+                      ? `Scanning ${scanStatus.active_sources.length} source${scanStatus.active_sources.length > 1 ? 's' : ''} in parallel`
+                      : scanStatus.current_source 
+                        ? `Scanning: ${scanStatus.current_source}`
+                        : scanStatus.current_step || "Initializing..."}
                   </p>
-                  <p className="text-sm text-blue-700">
-                    {scanStatus.current_step && scanStatus.current_source && scanStatus.current_step}
+                  {scanStatus.active_sources && scanStatus.active_sources.length > 0 && (
+                    <p className="text-sm text-blue-700">
+                      Active: {scanStatus.active_sources.join(", ")}
+                    </p>
+                  )}
+                  <p className="text-sm text-blue-600">
+                    {scanStatus.current_step}
                   </p>
                 </div>
               </div>
@@ -416,12 +426,33 @@ export default function SuggestionsPage() {
 
       {/* Sources Section */}
       <Card>
-        <CardHeader>
-          <CardTitle>Job Sources</CardTitle>
+        <CardHeader 
+          className="cursor-pointer hover:bg-gray-50 transition-colors rounded-t-lg"
+          onClick={() => setSourcesExpanded(!sourcesExpanded)}
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              {sourcesExpanded ? (
+                <svg className="h-5 w-5 text-gray-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              ) : (
+                <svg className="h-5 w-5 text-gray-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+              )}
+              <CardTitle>Job Sources</CardTitle>
+              <Badge variant="outline">{sources.length}</Badge>
+            </div>
+            <span className="text-sm font-normal text-gray-500">
+              {sourcesExpanded ? 'Click to collapse' : 'Click to expand'}
+            </span>
+          </div>
           <CardDescription>
             Add job board search URLs. The AI will scan these pages and extract matching jobs.
           </CardDescription>
         </CardHeader>
+        {sourcesExpanded && (
         <CardContent className="space-y-6">
           {/* Global Filter */}
           <div className="p-4 bg-purple-50 border border-purple-200 rounded-lg">
@@ -529,7 +560,10 @@ export default function SuggestionsPage() {
               </div>
             )}
             {sources.map((source) => {
-              const isCurrentlyScanning = isScanning && scanStatus?.current_source === source.name;
+              const isCurrentlyScanning = isScanning && (
+                scanStatus?.current_source === source.name ||
+                scanStatus?.active_sources?.includes(source.name)
+              );
               const isEditing = editingSourceId === source.id;
               
               if (isEditing) {
@@ -658,6 +692,7 @@ export default function SuggestionsPage() {
             )}
           </div>
         </CardContent>
+        )}
       </Card>
 
       {/* Suggestions Section */}
