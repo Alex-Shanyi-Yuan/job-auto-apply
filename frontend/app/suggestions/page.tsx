@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -522,22 +523,25 @@ export default function SuggestionsPage() {
               This filter is applied to ALL sources. Individual source filters are combined with this.
             </p>
             {editingGlobalFilter ? (
-              <div className="flex gap-2">
-                <Input
+              <div className="flex flex-col gap-2">
+                <Textarea
                   value={tempGlobalFilter}
                   onChange={(e) => setTempGlobalFilter(e.target.value)}
-                  placeholder="e.g., Remote software engineering roles, no senior positions"
-                  className="flex-1"
+                  placeholder="e.g., INCLUDE: Entry-level, Junior, New Grad&#10;EXCLUDE: Senior, Staff, Manager&#10;LOCATION: North America"
+                  className="flex-1 min-h-[120px]"
+                  rows={5}
                 />
-                <Button onClick={handleSaveGlobalFilter} size="sm">
-                  Save
-                </Button>
-                <Button variant="outline" size="sm" onClick={() => setEditingGlobalFilter(false)}>
-                  Cancel
-                </Button>
+                <div className="flex gap-2 justify-end">
+                  <Button onClick={handleSaveGlobalFilter} size="sm">
+                    Save
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => setEditingGlobalFilter(false)}>
+                    Cancel
+                  </Button>
+                </div>
               </div>
             ) : (
-              <p className="text-sm text-purple-800 bg-white/50 rounded px-3 py-2">
+              <p className="text-sm text-purple-800 bg-white/50 rounded px-3 py-2 whitespace-pre-wrap">
                 {globalFilter || <span className="text-purple-400 italic">No global filter set. Click edit to add one.</span>}
               </p>
             )}
