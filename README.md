@@ -81,8 +81,12 @@ We use a **Microservices Architecture** orchestrated by Docker Compose.
 1. **Configure Sources:** User adds job board URLs with optional filter prompts.
 2. **Scrape:** Calls Scraper Service to get search result HTML.
 3. **Discover:** `JobDiscoveryAgent` uses AI to extract job listings from HTML.
-4. **Score:** `JobScoringAgent` scores each job (0-100) based on resume fit.
-5. **Save:** Jobs saved with `suggested` status for user review.
+4. **Resolve URLs:** Relative job URLs converted to absolute using source base URL.
+5. **Score:** `JobScoringAgent` scores each job (0-100) based on resume fit.
+6. **Save:** All jobs saved with `suggested` status (including low-score jobs).
+7. **Report:** Detailed per-source results with skip reasons (low_score, already_exists).
+
+**Performance:** Sources and jobs within sources are processed in parallel using asyncio.
 
 #### Resume Tailoring Flow
 1. **Apply:** User clicks "Apply" on a suggested job (or submits URL manually).

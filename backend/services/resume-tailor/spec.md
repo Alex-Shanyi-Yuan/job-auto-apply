@@ -38,8 +38,8 @@ Acts as the primary backend API for the AutoCareer platform.
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/suggestions` | GET | List suggested jobs (sorted by score) |
-| `/suggestions/refresh` | POST | Trigger AI job discovery |
-| `/suggestions/status` | GET | Get scan progress |
+| `/suggestions/refresh` | POST | Trigger AI job discovery (accepts optional `source_ids` array) |
+| `/suggestions/status` | GET | Get scan progress with per-source results |
 
 ### Settings API
 | Endpoint | Method | Description |

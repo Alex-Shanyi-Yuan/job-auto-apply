@@ -96,12 +96,16 @@ All agents use Google Gemini Pro via `llm_client.py`.
 ### Job Discovery Flow
 1. User configures sources (job board URLs) + global filter
 2. Click "Refresh Suggestions" → `POST /suggestions/refresh`
-3. For each source:
+3. Sources are processed in parallel (MAX_CONCURRENT_SOURCES)
+4. For each source:
    - Scraper fetches HTML
-   - JobDiscoveryAgent extracts jobs
-   - JobScoringAgent scores each job
-   - Jobs saved with status="suggested"
-4. Frontend polls `/suggestions/status` for progress
+   - JobDiscoveryAgent extracts jobs (runs in thread pool)
+   - Relative URLs resolved to absolute using source base URL
+   - Jobs within source scored in parallel (MAX_CONCURRENT_JOBS)
+   - JobScoringAgent scores each job (runs in thread pool)
+   - Jobs saved with status="suggested" (including low-score jobs)
+5. Frontend polls `/suggestions/status` for progress
+6. Scan report shows added/skipped jobs with skip reasons
 
 ### Resume Tailoring Flow
 1. User clicks "Apply" on a job
@@ -121,10 +125,15 @@ All agents use Google Gemini Pro via `llm_client.py`.
 
 ### Suggestions Page Features
 - Global filter (purple card) - applied to all sources
-- Source management (add/edit/delete)
-- Real-time scan progress panel
+- Source management (add/edit/delete) with collapsible section
+- Multi-select sources for targeted scanning
+- Real-time scan progress panel with parallel source indicators
+- Scan report modal with per-source results
+  - Added jobs (green) vs Skipped jobs
+  - Skip reasons: "Low Score" (orange) vs "Already Existed" (gray)
 - Color-coded score badges (green/yellow/orange/red)
 - Apply/Dismiss actions with loading states
+- "View Last Report" button persists scan results across page refreshes
 
 ## Common Patterns
 
@@ -176,6 +185,9 @@ GOOGLE_API_KEY=xxx          # Required - Gemini API
 DATABASE_URL=postgresql://postgres:postgres@postgres:5432/autocareer
 SCRAPER_SERVICE_URL=http://scraper:8001
 MASTER_RESUME_PATH=./data/master.tex
+RATE_LIMIT_DELAY=0.2        # Seconds between job scrapes (default: 0.2)
+MAX_CONCURRENT_SOURCES=5    # Max parallel source scans (default: 5)
+MAX_CONCURRENT_JOBS=10      # Max parallel job scrapes per source (default: 10)
 ```
 
 ### Frontend (.env.local)

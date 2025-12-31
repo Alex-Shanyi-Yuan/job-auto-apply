@@ -13,12 +13,13 @@ A specialized microservice for fetching and extracting text content from job pos
 
 ### `POST /scrape`
 
-Scrapes a given URL and returns the title and text content.
+Scrapes a given URL and returns the title and content.
 
 **Request:**
 ```json
 {
-  "url": "https://www.linkedin.com/jobs/view/..."
+  "url": "https://www.linkedin.com/jobs/view/...",
+  "format": "text"  // or "html" for cleaned HTML with links preserved
 }
 ```
 
@@ -29,6 +30,11 @@ Scrapes a given URL and returns the title and text content.
   "text": "Job Description text content...",
   "url": "https://www.linkedin.com/jobs/view/..."
 }
+```
+
+**Format Options:**
+- `text` (default): Clean text with HTML stripped
+- `html`: Cleaned HTML preserving structure and links (used for job discovery)
 ```
 
 ## Local Development

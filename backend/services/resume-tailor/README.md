@@ -10,6 +10,8 @@ The core backend service for AutoCareer - handles AI job discovery, scoring, and
 - 📄 **LaTeX Support**: Works with your existing LaTeX resume templates
 - 🐳 **Dockerized**: All dependencies (Python + TeX Live) in one container
 - 🌐 **REST API**: Full API for frontend integration
+- ⚡ **Parallel Processing**: Scan multiple sources and jobs concurrently
+- 📝 **Detailed Reports**: Per-source scan results with skip reasons
 
 ## Quick Start (Web Mode)
 
@@ -31,6 +33,11 @@ Create a `.env` file:
 GOOGLE_API_KEY=your_gemini_api_key_here
 DATABASE_URL=postgresql://postgres:postgres@postgres:5432/autocareer
 SCRAPER_SERVICE_URL=http://scraper:8001
+
+# Optional performance tuning
+RATE_LIMIT_DELAY=0.2        # Seconds between job scrapes (default: 0.2)
+MAX_CONCURRENT_SOURCES=5    # Max parallel source scans (default: 5)
+MAX_CONCURRENT_JOBS=10      # Max parallel job scrapes per source (default: 10)
 ```
 
 Get your Gemini API key from: https://makersuite.google.com/app/apikey

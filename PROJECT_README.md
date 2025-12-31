@@ -61,21 +61,26 @@ A self-hosted platform for automating job search and application processes using
 ### 1. Configure Job Sources
 
 Go to **Suggestions** → **Add Source**:
-- Add job board search URLs (LinkedIn, Indeed, etc.)
+- Add job board search URLs (LinkedIn, Indeed, company career pages)
 - Set a global filter (e.g., "Software Engineer, 5+ years experience")
 - Optionally add source-specific filters
+- Use main career page URLs, not internal API endpoints
 
 ### 2. Discover Jobs
 
 Click **Refresh Suggestions** to:
-- Scan all configured sources
+- Select specific sources or scan all
+- Sources are scanned in parallel for speed
 - AI extracts job listings from search results
+- Relative job URLs are automatically resolved
 - AI scores each job (0-100) based on your resume
+- View detailed scan report with added/skipped jobs
 
 ### 3. Apply to Jobs
 
 For each suggested job:
 - Review the AI score and job details
+- Jobs with low scores are still saved (visible in scan report)
 - Click **Apply** to generate a tailored resume
 - Or **Dismiss** to remove from suggestions
 
