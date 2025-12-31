@@ -73,8 +73,8 @@ app.add_middleware(
 SCRAPER_SERVICE_URL = os.getenv("SCRAPER_SERVICE_URL", "http://scraper:8001")
 MASTER_RESUME_PATH = os.getenv("MASTER_RESUME_PATH", "./data/master.tex")
 RATE_LIMIT_DELAY = float(os.getenv("RATE_LIMIT_DELAY", "0.2"))  # Seconds between scrapes (reduced for speed)
-MAX_CONCURRENT_SOURCES = int(os.getenv("MAX_CONCURRENT_SOURCES", "3"))  # Max parallel source scans
-MAX_CONCURRENT_JOBS = int(os.getenv("MAX_CONCURRENT_JOBS", "5"))  # Max parallel job scrapes per source
+MAX_CONCURRENT_SOURCES = int(os.getenv("MAX_CONCURRENT_SOURCES", "5"))  # Max parallel source scans
+MAX_CONCURRENT_JOBS = int(os.getenv("MAX_CONCURRENT_JOBS", "10"))  # Max parallel job scrapes per source
 
 # Global scan status tracking
 scan_status = {
@@ -467,20 +467,7 @@ async def process_single_source(
                     
                     dj = result["dj"]
                     score = result["score"]
-                    
-                    # Skip jobs with score under 50%
-                    if score is not None and score < 50:
-                        logger.info(f"Skipping low-score job '{dj.title}' (score: {score}/100)")
-                        source_result["jobs_skipped"] += 1
-                        source_result["skipped_jobs"].append({
-                            "id": None,
-                            "title": dj.title,
-                            "company": dj.company,
-                            "url": dj.url,
-                            "score": score,
-                            "skip_reason": "low_score",
-                        })
-                        continue
+                    is_low_score = score is not None and score < 50
                     
                     # Save new job
                     with Session(engine) as session:
@@ -510,14 +497,27 @@ async def process_single_source(
                         session.commit()
                         session.refresh(new_job)
                         
-                        source_result["jobs_added"] += 1
-                        source_result["added_jobs"].append({
-                            "id": new_job.id,
-                            "title": new_job.title,
-                            "company": new_job.company,
-                            "url": new_job.url,
-                            "score": score,
-                        })
+                        # Track in report - low score jobs go to skipped, others to added
+                        if is_low_score:
+                            logger.info(f"Added low-score job '{dj.title}' (score: {score}/100)")
+                            source_result["jobs_skipped"] += 1
+                            source_result["skipped_jobs"].append({
+                                "id": new_job.id,
+                                "title": new_job.title,
+                                "company": new_job.company,
+                                "url": new_job.url,
+                                "score": score,
+                                "skip_reason": "low_score",
+                            })
+                        else:
+                            source_result["jobs_added"] += 1
+                            source_result["added_jobs"].append({
+                                "id": new_job.id,
+                                "title": new_job.title,
+                                "company": new_job.company,
+                                "url": new_job.url,
+                                "score": score,
+                            })
             
             # Update source last_scraped_at
             with Session(engine) as session:
