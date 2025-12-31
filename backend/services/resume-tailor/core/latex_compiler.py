@@ -129,6 +129,7 @@ class LaTeXCompiler:
         self,
         temp_name: str,
         company_name: str = "Company",
+        job_title: str = "",
         include_date: bool = True
     ) -> Path:
         """
@@ -137,6 +138,7 @@ class LaTeXCompiler:
         Args:
             temp_name: Current PDF filename (without .pdf)
             company_name: Company name for the filename
+            job_title: Job title for the filename
             include_date: Whether to include date in filename
             
         Returns:
@@ -147,22 +149,22 @@ class LaTeXCompiler:
         if not old_path.exists():
             raise FileNotFoundError(f"PDF not found: {old_path}")
         
-        # Create new filename
+        # Create new filename with short UUID for uniqueness
         date_str = datetime.now().strftime("%Y-%m-%d") if include_date else ""
+        short_uuid = str(uuid.uuid4())[:8]
+        
+        # Sanitize job title
+        sanitized_title = "".join(c for c in job_title if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_')[:30]
+        
         parts = ["Resume", company_name.replace(" ", "_")]
+        if sanitized_title:
+            parts.append(sanitized_title)
         if date_str:
             parts.append(date_str)
+        parts.append(short_uuid)
         
         new_name = "_".join(parts) + ".pdf"
         new_path = self.output_dir / new_name
-        
-        # Handle existing file
-        if new_path.exists():
-            counter = 1
-            while new_path.exists():
-                new_name = "_".join(parts) + f"_{counter}.pdf"
-                new_path = self.output_dir / new_name
-                counter += 1
         
         # Rename
         shutil.move(str(old_path), str(new_path))
@@ -174,6 +176,7 @@ def compile_pdf(
     latex_content: str,
     output_dir: str = "./output",
     company_name: str = "Company",
+    job_title: str = "",
     cleanup: bool = True
 ) -> str:
     """
@@ -183,6 +186,7 @@ def compile_pdf(
         latex_content: Complete LaTeX document as string
         output_dir: Directory for output files
         company_name: Company name for PDF filename
+        job_title: Job title for PDF filename
         cleanup: Whether to remove auxiliary files
         
     Returns:
@@ -212,7 +216,7 @@ def compile_pdf(
     
     # Rename PDF
     base_name = tex_path.stem
-    pdf_path = compiler.rename_output_pdf(base_name, company_name)
+    pdf_path = compiler.rename_output_pdf(base_name, company_name, job_title)
     print(f"✓ PDF saved as: {pdf_path}")
     
     # Cleanup auxiliary files

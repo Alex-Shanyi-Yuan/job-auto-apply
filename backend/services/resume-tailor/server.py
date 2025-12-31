@@ -292,13 +292,15 @@ async def process_application(job_id: int, url: str):
             
             # 4. Compile
             logger.debug("Compiling PDF")
-            # Sanitize company name for filename
+            # Sanitize company name and job title for filename
             company_name = "".join(c for c in job_posting.company_name if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_')
+            job_title = "".join(c for c in job_posting.job_title if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_')
             
             pdf_path = compile_pdf(
                 latex_content=tailored_latex,
                 output_dir="./output",
                 company_name=company_name,
+                job_title=job_title,
                 cleanup=True
             )
             
@@ -719,8 +721,12 @@ def get_job_pdf(job_id: int):
         
         if not job.pdf_path or not os.path.exists(job.pdf_path):
             raise HTTPException(status_code=404, detail="PDF not found")
+        
+        # Use a clean, professional filename for download
+        # The actual file on disk has a unique name to avoid collisions
+        download_filename = "Resume.pdf"
             
-        return FileResponse(job.pdf_path, media_type="application/pdf", filename=os.path.basename(job.pdf_path))
+        return FileResponse(job.pdf_path, media_type="application/pdf", filename=download_filename)
 
 
 # === Job Sources API ===
