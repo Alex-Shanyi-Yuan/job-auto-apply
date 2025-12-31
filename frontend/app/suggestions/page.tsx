@@ -852,7 +852,7 @@ export default function SuggestionsPage() {
                       <div className="text-2xl font-bold text-gray-700">
                         {scanReport.reduce((sum, r) => sum + r.jobs_skipped, 0)}
                       </div>
-                      <div className="text-sm text-gray-600">Already Existed</div>
+                      <div className="text-sm text-gray-600">Skipped</div>
                     </div>
                   </div>
 
@@ -956,50 +956,102 @@ export default function SuggestionsPage() {
                             )}
 
                             {/* Skipped Jobs */}
-                            {result.skipped_jobs?.length > 0 && (
-                              <div>
-                                <div className="text-sm font-medium text-gray-500 mb-2 flex items-center gap-1">
-                                  <svg className="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                  </svg>
-                                  Already Existed ({result.skipped_jobs.length})
-                                </div>
-                                <div className="space-y-1 max-h-24 overflow-y-auto">
-                                  {result.skipped_jobs.map((job, jobIndex) => (
-                                    <div key={jobIndex} className="flex items-center justify-between text-sm bg-white/30 rounded px-2 py-1 text-gray-600">
-                                      <div className="flex items-center gap-2 min-w-0 flex-1">
-                                        <span className="truncate" title={job.title}>{job.title}</span>
-                                        <span className="text-gray-400 text-xs shrink-0">@ {job.company}</span>
-                                        {job.score !== null && (
-                                          <Badge 
-                                            variant="outline" 
-                                            className={`text-xs shrink-0 ${
-                                              job.score >= 70 ? "border-green-500 text-green-700" :
-                                              job.score >= 50 ? "border-yellow-500 text-yellow-700" :
-                                              job.score >= 30 ? "border-orange-500 text-orange-700" :
-                                              "border-red-500 text-red-700"
-                                            }`}
-                                          >
-                                            {job.score}
-                                          </Badge>
-                                        )}
-                                      </div>
-                                      <a 
-                                        href={job.url} 
-                                        target="_blank" 
-                                        rel="noopener noreferrer"
-                                        className="text-blue-600 hover:text-blue-800 shrink-0 ml-2"
-                                        title="View job posting"
-                                      >
+                            {result.skipped_jobs?.length > 0 && (() => {
+                              // Separate by skip reason
+                              const alreadyExisted = result.skipped_jobs.filter(j => j.skip_reason === 'already_exists' || !j.skip_reason);
+                              const lowScore = result.skipped_jobs.filter(j => j.skip_reason === 'low_score');
+                              
+                              return (
+                                <>
+                                  {/* Low Score Jobs */}
+                                  {lowScore.length > 0 && (
+                                    <div className="mb-3">
+                                      <div className="text-sm font-medium text-orange-600 mb-2 flex items-center gap-1">
                                         <svg className="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 17h8m0 0V9m0 8l-8-8-4 4-6-6" />
                                         </svg>
-                                      </a>
+                                        Low Score ({lowScore.length})
+                                      </div>
+                                      <div className="space-y-1 max-h-24 overflow-y-auto">
+                                        {lowScore.map((job, jobIndex) => (
+                                          <div key={jobIndex} className="flex items-center justify-between text-sm bg-orange-50 rounded px-2 py-1 text-gray-600">
+                                            <div className="flex items-center gap-2 min-w-0 flex-1">
+                                              <span className="truncate" title={job.title}>{job.title}</span>
+                                              <span className="text-gray-400 text-xs shrink-0">@ {job.company}</span>
+                                              {job.score !== null && (
+                                                <Badge 
+                                                  variant="outline" 
+                                                  className="text-xs shrink-0 border-red-500 text-red-700"
+                                                >
+                                                  {job.score}
+                                                </Badge>
+                                              )}
+                                            </div>
+                                            <a 
+                                              href={job.url} 
+                                              target="_blank" 
+                                              rel="noopener noreferrer"
+                                              className="text-blue-600 hover:text-blue-800 shrink-0 ml-2"
+                                              title="View job posting"
+                                            >
+                                              <svg className="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                                              </svg>
+                                            </a>
+                                          </div>
+                                        ))}
+                                      </div>
                                     </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
+                                  )}
+                                  
+                                  {/* Already Existed Jobs */}
+                                  {alreadyExisted.length > 0 && (
+                                    <div>
+                                      <div className="text-sm font-medium text-gray-500 mb-2 flex items-center gap-1">
+                                        <svg className="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                        </svg>
+                                        Already Existed ({alreadyExisted.length})
+                                      </div>
+                                      <div className="space-y-1 max-h-24 overflow-y-auto">
+                                        {alreadyExisted.map((job, jobIndex) => (
+                                          <div key={jobIndex} className="flex items-center justify-between text-sm bg-white/30 rounded px-2 py-1 text-gray-600">
+                                            <div className="flex items-center gap-2 min-w-0 flex-1">
+                                              <span className="truncate" title={job.title}>{job.title}</span>
+                                              <span className="text-gray-400 text-xs shrink-0">@ {job.company}</span>
+                                              {job.score !== null && (
+                                                <Badge 
+                                                  variant="outline" 
+                                                  className={`text-xs shrink-0 ${
+                                                    job.score >= 70 ? "border-green-500 text-green-700" :
+                                                    job.score >= 50 ? "border-yellow-500 text-yellow-700" :
+                                                    job.score >= 30 ? "border-orange-500 text-orange-700" :
+                                                    "border-red-500 text-red-700"
+                                                  }`}
+                                                >
+                                                  {job.score}
+                                                </Badge>
+                                              )}
+                                            </div>
+                                            <a 
+                                              href={job.url} 
+                                              target="_blank" 
+                                              rel="noopener noreferrer"
+                                              className="text-blue-600 hover:text-blue-800 shrink-0 ml-2"
+                                              title="View job posting"
+                                            >
+                                              <svg className="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                                              </svg>
+                                            </a>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                </>
+                              );
+                            })()}
                           </div>
                         )}
                       </div>

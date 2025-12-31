@@ -10,6 +10,7 @@ import logging
 import asyncio
 from pathlib import Path
 from datetime import datetime
+from urllib.parse import urljoin, urlparse
 from sqlmodel import Session, select
 from contextlib import asynccontextmanager
 
@@ -22,6 +23,34 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# only google needs this right now
+def resolve_job_url(job_url: str, source_url: str) -> str:
+    """
+    Resolve a job URL that may be relative to an absolute URL.
+    
+    Args:
+        job_url: The job URL (may be relative like '/jobs/123' or 'jobs/123')
+        source_url: The source page URL to use as base for resolution
+    
+    Returns:
+        Absolute URL to the job posting
+    """
+    # If already absolute, return as-is
+    if job_url.startswith('http://') or job_url.startswith('https://'):
+        return job_url
+    
+    # Parse the source URL to get the base
+    parsed = urlparse(source_url)
+    base_url = f"{parsed.scheme}://{parsed.netloc}"
+    
+    # If job_url starts with '/', it's root-relative
+    if job_url.startswith('/'):
+        return base_url + job_url
+    
+    # Otherwise, use urljoin with the base URL (not the full path)
+    # This handles relative paths like 'jobs/results/123'
+    return urljoin(base_url + '/', job_url)
 
 # Initialize FastAPI
 @asynccontextmanager
@@ -43,8 +72,9 @@ app.add_middleware(
 # Configuration
 SCRAPER_SERVICE_URL = os.getenv("SCRAPER_SERVICE_URL", "http://scraper:8001")
 MASTER_RESUME_PATH = os.getenv("MASTER_RESUME_PATH", "./data/master.tex")
-RATE_LIMIT_DELAY = float(os.getenv("RATE_LIMIT_DELAY", "0.5"))  # Seconds between scrapes (reduced for speed)
+RATE_LIMIT_DELAY = float(os.getenv("RATE_LIMIT_DELAY", "0.2"))  # Seconds between scrapes (reduced for speed)
 MAX_CONCURRENT_SOURCES = int(os.getenv("MAX_CONCURRENT_SOURCES", "3"))  # Max parallel source scans
+MAX_CONCURRENT_JOBS = int(os.getenv("MAX_CONCURRENT_JOBS", "5"))  # Max parallel job scrapes per source
 
 # Global scan status tracking
 scan_status = {
@@ -60,10 +90,6 @@ scan_status = {
     "source_results": [],  # Per-source scan results for report
     "active_sources": [],  # List of currently scanning source names (for parallel)
 }
-
-# Lock for thread-safe updates to scan_status
-import threading
-scan_status_lock = threading.Lock()
 
 
 # === Request/Response Models ===
@@ -120,6 +146,7 @@ class JobInfo(BaseModel):
     company: str
     url: str
     score: Optional[int] = None
+    skip_reason: Optional[str] = None  # 'already_exists', 'low_score', 'scrape_failed'
 
 
 class SourceScanResult(BaseModel):
@@ -322,9 +349,8 @@ async def process_single_source(
         logger.info(f"Processing source: {source_name} ({source_url})")
         
         # Update active sources
-        with scan_status_lock:
-            scan_status["active_sources"].append(source_name)
-            scan_status["current_source"] = ", ".join(scan_status["active_sources"])
+        scan_status["active_sources"].append(source_name)
+        scan_status["current_source"] = ", ".join(scan_status["active_sources"])
         
         try:
             # 1. Scrape the search results page (HTML format)
@@ -353,104 +379,145 @@ async def process_single_source(
             else:
                 combined_filter = global_filter or "Find all software engineering and technical jobs"
             
-            discovered_jobs = discovery_agent.discover(html_content, combined_filter)
+            # Run LLM call in thread pool to avoid blocking event loop
+            discovered_jobs = await asyncio.to_thread(discovery_agent.discover, html_content, combined_filter)
             logger.info(f"Discovered {len(discovered_jobs)} jobs from {source_name}")
             
-            source_result["jobs_found"] = len(discovered_jobs)
-            with scan_status_lock:
-                scan_status["jobs_found"] += len(discovered_jobs)
-            
-            # 3. Process each discovered job
+            # Resolve relative URLs to absolute URLs using source URL as base
             for dj in discovered_jobs:
-                # Use a new session for each job to avoid conflicts
-                with Session(engine) as session:
-                    # Check if job already exists (by URL)
-                    existing = session.exec(select(Job).where(Job.url == dj.url)).first()
-                    if existing:
-                        logger.debug(f"Job already exists: {dj.url}")
+                dj.url = resolve_job_url(dj.url, source_url)
+            
+            source_result["jobs_found"] = len(discovered_jobs)
+            scan_status["jobs_found"] += len(discovered_jobs)
+            
+            # 3. Batch check which jobs already exist in DB
+            job_urls = [dj.url for dj in discovered_jobs]
+            with Session(engine) as session:
+                existing_jobs = session.exec(
+                    select(Job).where(Job.url.in_(job_urls))
+                ).all()
+                existing_urls = {job.url: job for job in existing_jobs}
+            
+            # Separate new jobs from existing ones
+            new_jobs_to_process = []
+            for dj in discovered_jobs:
+                if dj.url in existing_urls:
+                    existing = existing_urls[dj.url]
+                    logger.debug(f"Job already exists: {dj.url}")
+                    source_result["jobs_skipped"] += 1
+                    source_result["skipped_jobs"].append({
+                        "id": existing.id,
+                        "title": existing.title,
+                        "company": existing.company,
+                        "url": existing.url,
+                        "score": existing.score,
+                        "skip_reason": "already_exists",
+                    })
+                else:
+                    new_jobs_to_process.append(dj)
+            
+            logger.info(f"Source '{source_name}': {len(new_jobs_to_process)} new jobs to process, {len(existing_urls)} already exist")
+            
+            # 4. Process new jobs in parallel with semaphore
+            job_semaphore = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
+            
+            async def process_single_job(dj):
+                """Process a single job - scrape and score."""
+                async with job_semaphore:
+                    # Small delay for rate limiting
+                    await asyncio.sleep(RATE_LIMIT_DELAY)
+                    
+                    score = None
+                    if scoring_agent and master_resume:
+                        try:
+                            async with httpx.AsyncClient() as client:
+                                job_response = await client.post(
+                                    f"{SCRAPER_SERVICE_URL}/scrape",
+                                    json={"url": dj.url, "format": "text"},
+                                    timeout=60.0
+                                )
+                                job_response.raise_for_status()
+                                job_text = job_response.json()["text"]
+                                
+                            # Score the job in thread pool to avoid blocking event loop
+                            job_score = await asyncio.to_thread(scoring_agent.score, job_text, master_resume)
+                            score = job_score.score
+                            scan_status["jobs_scored"] += 1
+                            logger.info(f"Scored job '{dj.title}': {score}/100 - {job_score.reasoning}")
+                        except Exception as e:
+                            logger.warning(f"Failed to score job {dj.url}: {e}")
+                    
+                    return {
+                        "dj": dj,
+                        "score": score
+                    }
+            
+            # Process all new jobs in parallel
+            if new_jobs_to_process:
+                job_results = await asyncio.gather(
+                    *[process_single_job(dj) for dj in new_jobs_to_process],
+                    return_exceptions=True
+                )
+                
+                # Save results to database
+                for result in job_results:
+                    if isinstance(result, Exception):
+                        logger.warning(f"Job processing failed: {result}")
+                        continue
+                    
+                    dj = result["dj"]
+                    score = result["score"]
+                    
+                    # Skip jobs with score under 50%
+                    if score is not None and score < 50:
+                        logger.info(f"Skipping low-score job '{dj.title}' (score: {score}/100)")
                         source_result["jobs_skipped"] += 1
                         source_result["skipped_jobs"].append({
-                            "id": existing.id,
-                            "title": existing.title,
-                            "company": existing.company,
-                            "url": existing.url,
-                            "score": existing.score,
+                            "id": None,
+                            "title": dj.title,
+                            "company": dj.company,
+                            "url": dj.url,
+                            "score": score,
+                            "skip_reason": "low_score",
                         })
                         continue
-                
-                # Rate limiting - small delay between job scrapes
-                await asyncio.sleep(RATE_LIMIT_DELAY)
-                
-                # Scrape individual job page for scoring
-                score = None
-                if scoring_agent and master_resume:
-                    try:
-                        async with httpx.AsyncClient() as client:
-                            job_response = await client.post(
-                                f"{SCRAPER_SERVICE_URL}/scrape",
-                                json={"url": dj.url, "format": "text"},
-                                timeout=60.0
-                            )
-                            job_response.raise_for_status()
-                            job_text = job_response.json()["text"]
-                            
-                        # Score the job
-                        job_score = scoring_agent.score(job_text, master_resume)
-                        score = job_score.score
-                        with scan_status_lock:
-                            scan_status["jobs_scored"] += 1
-                        logger.info(f"Scored job '{dj.title}': {score}/100 - {job_score.reasoning}")
-                        
-                        # Skip jobs with score under 50%
-                        if score is not None and score < 50:
-                            logger.info(f"Skipping low-score job '{dj.title}' (score: {score}/100)")
+                    
+                    # Save new job
+                    with Session(engine) as session:
+                        # Double-check job doesn't exist (race condition protection)
+                        existing = session.exec(select(Job).where(Job.url == dj.url)).first()
+                        if existing:
                             source_result["jobs_skipped"] += 1
                             source_result["skipped_jobs"].append({
-                                "id": None,
-                                "title": dj.title,
-                                "company": dj.company,
-                                "url": dj.url,
-                                "score": score,
+                                "id": existing.id,
+                                "title": existing.title,
+                                "company": existing.company,
+                                "url": existing.url,
+                                "score": existing.score,
+                                "skip_reason": "already_exists",
                             })
                             continue
-                    except Exception as e:
-                        logger.warning(f"Failed to score job {dj.url}: {e}")
-                
-                # Save new job (with fresh session to avoid conflicts)
-                with Session(engine) as session:
-                    # Double-check job doesn't exist (race condition protection)
-                    existing = session.exec(select(Job).where(Job.url == dj.url)).first()
-                    if existing:
-                        source_result["jobs_skipped"] += 1
-                        source_result["skipped_jobs"].append({
-                            "id": existing.id,
-                            "title": existing.title,
-                            "company": existing.company,
-                            "url": existing.url,
-                            "score": existing.score,
+                        
+                        new_job = Job(
+                            url=dj.url,
+                            company=dj.company,
+                            title=dj.title,
+                            status="suggested",
+                            score=score,
+                            source_id=source_id
+                        )
+                        session.add(new_job)
+                        session.commit()
+                        session.refresh(new_job)
+                        
+                        source_result["jobs_added"] += 1
+                        source_result["added_jobs"].append({
+                            "id": new_job.id,
+                            "title": new_job.title,
+                            "company": new_job.company,
+                            "url": new_job.url,
+                            "score": score,
                         })
-                        continue
-                    
-                    new_job = Job(
-                        url=dj.url,
-                        company=dj.company,
-                        title=dj.title,
-                        status="suggested",
-                        score=score,
-                        source_id=source_id
-                    )
-                    session.add(new_job)
-                    session.commit()
-                    session.refresh(new_job)
-                    
-                    source_result["jobs_added"] += 1
-                    source_result["added_jobs"].append({
-                        "id": new_job.id,
-                        "title": new_job.title,
-                        "company": new_job.company,
-                        "url": new_job.url,
-                        "score": score,
-                    })
             
             # Update source last_scraped_at
             with Session(engine) as session:
@@ -468,11 +535,10 @@ async def process_single_source(
         
         finally:
             # Remove from active sources
-            with scan_status_lock:
-                if source_name in scan_status["active_sources"]:
-                    scan_status["active_sources"].remove(source_name)
-                scan_status["current_source"] = ", ".join(scan_status["active_sources"]) if scan_status["active_sources"] else None
-                scan_status["sources_completed"] += 1
+            if source_name in scan_status["active_sources"]:
+                scan_status["active_sources"].remove(source_name)
+            scan_status["current_source"] = ", ".join(scan_status["active_sources"]) if scan_status["active_sources"] else None
+            scan_status["sources_completed"] += 1
         
         return source_result
 
@@ -487,15 +553,14 @@ async def process_job_discovery(source_ids: Optional[List[int]] = None):
     logger.info(f"Starting parallel job discovery process... (source_ids={source_ids})")
     
     # Reset scan status
-    with scan_status_lock:
-        scan_status = {
-            "is_scanning": True,
-            "current_source": None,
-            "current_source_id": None,
-            "sources_total": 0,
-            "sources_completed": 0,
-            "jobs_found": 0,
-            "jobs_scored": 0,
+    scan_status = {
+        "is_scanning": True,
+        "current_source": None,
+        "current_source_id": None,
+        "sources_total": 0,
+        "sources_completed": 0,
+        "jobs_found": 0,
+        "jobs_scored": 0,
             "current_step": "initializing",
             "error": None,
             "source_results": [],
@@ -514,9 +579,8 @@ async def process_job_discovery(source_ids: Optional[List[int]] = None):
             
             if not sources:
                 logger.info("No job sources to scan")
-                with scan_status_lock:
-                    scan_status["is_scanning"] = False
-                    scan_status["current_step"] = "completed"
+                scan_status["is_scanning"] = False
+                scan_status["current_step"] = "completed"
                 return
             
             # Extract source data before session closes
@@ -530,9 +594,8 @@ async def process_job_discovery(source_ids: Optional[List[int]] = None):
                 for s in sources
             ]
         
-        with scan_status_lock:
-            scan_status["sources_total"] = len(source_data)
-            scan_status["current_step"] = "scanning sources in parallel"
+        scan_status["sources_total"] = len(source_data)
+        scan_status["current_step"] = "scanning sources in parallel"
         
         # Load master resume once for scoring
         try:
@@ -569,35 +632,31 @@ async def process_job_discovery(source_ids: Optional[List[int]] = None):
         for result in results:
             if isinstance(result, Exception):
                 logger.error(f"Source processing failed with exception: {result}")
-                with scan_status_lock:
-                    scan_status["source_results"].append({
-                        "source_id": 0,
-                        "source_name": "Unknown",
-                        "source_url": "",
-                        "jobs_found": 0,
-                        "jobs_added": 0,
-                        "jobs_skipped": 0,
-                        "added_jobs": [],
-                        "skipped_jobs": [],
-                        "error": str(result),
-                    })
+                scan_status["source_results"].append({
+                    "source_id": 0,
+                    "source_name": "Unknown",
+                    "source_url": "",
+                    "jobs_found": 0,
+                    "jobs_added": 0,
+                    "jobs_skipped": 0,
+                    "added_jobs": [],
+                    "skipped_jobs": [],
+                    "error": str(result),
+                })
             else:
-                with scan_status_lock:
-                    scan_status["source_results"].append(result)
+                scan_status["source_results"].append(result)
         
         logger.info("Parallel job discovery process completed")
     
     except Exception as e:
         logger.exception(f"Error in job discovery: {e}")
-        with scan_status_lock:
-            scan_status["error"] = str(e)
+        scan_status["error"] = str(e)
     
     finally:
-        with scan_status_lock:
-            scan_status["is_scanning"] = False
-            scan_status["current_step"] = "completed"
-            scan_status["current_source"] = None
-            scan_status["active_sources"] = []
+        scan_status["is_scanning"] = False
+        scan_status["current_step"] = "completed"
+        scan_status["current_source"] = None
+        scan_status["active_sources"] = []
 
 @app.post("/apply", response_model=JobResponse)
 async def apply_job(request: ApplyRequest, background_tasks: BackgroundTasks):
