@@ -111,7 +111,12 @@ Go to **Dashboard** to:
 
 ## Development
 
-### Run services separately
+All services (frontend, backend, database) are included in docker-compose. Just run:
+```bash
+docker-compose up --build
+```
+
+### Run services separately (for development)
 
 **Frontend:**
 ```bash

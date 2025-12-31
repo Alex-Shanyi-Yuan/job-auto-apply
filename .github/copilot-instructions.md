@@ -198,7 +198,7 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
 ## Development Commands
 
 ```bash
-# Start all services
+# Start all services (frontend, backend, database)
 docker-compose up --build
 
 # Run migrations
@@ -206,8 +206,9 @@ docker-compose exec tailor alembic upgrade head
 
 # View logs
 docker-compose logs -f tailor
+docker-compose logs -f frontend
 
-# Frontend dev (outside Docker)
+# Frontend dev (outside Docker, for faster iteration)
 cd frontend && npm run dev
 ```
 

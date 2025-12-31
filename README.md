@@ -21,6 +21,7 @@ We use a **Microservices Architecture** orchestrated by Docker Compose.
 **Framework:** Next.js 14 (App Router)
 **UI Library:** shadcn/ui + Tailwind CSS
 **Port:** `3000`
+**Docker:** Included in docker-compose (builds automatically)
 
 **Responsibility:**
 * User Interface for Dashboard, Job Details, and Suggestions.
@@ -156,6 +157,8 @@ We use a **Microservices Architecture** orchestrated by Docker Compose.
 ---
 
 ## 6. Quick Start
+
+All services including the frontend are orchestrated by Docker Compose:
 
 ```bash
 # Clone and start all services
