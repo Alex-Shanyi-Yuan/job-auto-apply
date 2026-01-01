@@ -208,14 +208,14 @@ def set_global_filter(value: str) -> None:
         session.commit()
 
 
-def get_combined_filter(source: JobSource) -> str:
+def get_combined_filter(source_filter: Optional[str] = None) -> str:
     """Combine global filter with source-specific filter."""
     global_filter = get_global_filter()
-    source_filter = source.filter_prompt or ""
+    source_filter = source_filter or ""
     
     if global_filter and source_filter:
-        return f"{global_filter}. Additionally: {source_filter}"
-    return global_filter or source_filter or "Any job posting"
+        return f"{global_filter}\n\nAdditional filter for this source:\n{source_filter}"
+    return global_filter or source_filter or "Find all software engineering and technical jobs"
 
 
 def load_master_resume(file_path: str) -> str:
@@ -367,19 +367,7 @@ async def process_single_source(
                 html_content = data["text"]
             
             # 2. Discover jobs using AI with combined filter
-            # Build combined filter
-            with Session(engine) as session:
-                global_filter_setting = session.exec(
-                    select(Settings).where(Settings.key == "global_filter")
-                ).first()
-                global_filter = global_filter_setting.value if global_filter_setting else ""
-            
-            if source_filter_prompt and global_filter:
-                combined_filter = f"{global_filter}\n\nAdditional filter for this source:\n{source_filter_prompt}"
-            elif source_filter_prompt:
-                combined_filter = source_filter_prompt
-            else:
-                combined_filter = global_filter or "Find all software engineering and technical jobs"
+            combined_filter = get_combined_filter(source_filter_prompt)
             
             # Run LLM call in thread pool to avoid blocking event loop
             discovered_jobs = await asyncio.to_thread(discovery_agent.discover, html_content, combined_filter)
