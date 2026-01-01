@@ -1,10 +1,10 @@
-# Quick Start Guide - Resume Tailor
+# Quick Start Guide - AutoCareer
 
 Get up and running in 5 minutes!
 
 ## Prerequisites
 
-- Docker installed (or Python 3.11+ with TeX Live)
+- Docker and Docker Compose installed
 - Google Gemini API key
 
 ## Setup Steps
@@ -19,125 +19,111 @@ Get up and running in 5 minutes!
 
 ```bash
 cd backend/services/resume-tailor
-copy .env.example .env
+cp .env.example .env
 ```
 
-Edit `.env` and replace `your_gemini_api_key_here` with your actual key:
+Edit `.env` and add your API key:
 ```
 GOOGLE_API_KEY=AIzaSyC...your_actual_key_here
+DATABASE_URL=postgresql://postgres:postgres@postgres:5432/autocareer
+SCRAPER_SERVICE_URL=http://scraper:8001
 ```
 
 ### 3. Prepare Your Resume
 
 Edit `data/master.tex` with your actual resume content. The provided template is just an example.
 
-### 4. Build Docker Container
+### 4. Start All Services
 
+From the project root:
 ```bash
-docker-compose build
+cd /path/to/job-auto-apply
+docker-compose up --build
 ```
 
-This takes 2-3 minutes (downloads Python + TeX Live).
+This takes 2-3 minutes on first run (downloads Python + TeX Live + Playwright).
 
-### 5. Run Your First Tailoring
+### 5. Open the Web UI
 
-Save a job description to a text file:
+Navigate to: **http://localhost:3000**
 
-**job_description.txt**
-```
-Senior Software Engineer
+## Using the Web UI
 
-TechCorp is looking for a talented backend engineer...
+### Step 1: Set Up Global Filter
 
-Requirements:
-- 5+ years Python experience
-- AWS and Docker expertise
-- Strong system design skills
-```
+1. Go to **Suggestions** page
+2. Find the **Global Filter** card (purple)
+3. Click **Edit** and enter your job preferences:
+   ```
+   Software Engineer roles, 3-5 years experience, 
+   Python or JavaScript, remote-friendly
+   ```
+4. Click **Save**
 
-Then run:
-```bash
-docker-compose run tailor --file job_description.txt
-```
+### Step 2: Add Job Sources
 
-You should see:
-```
-============================================================
-                    Resume Tailor CLI                      
-============================================================
+1. In the **Job Sources** section, click **Add Source**
+2. Enter:
+   - **Name**: e.g., "LinkedIn Python Jobs"
+   - **URL**: A job board search results URL
+   - **Filter** (optional): Source-specific criteria
+3. Click **Add Source**
 
-📄 Loading master resume...
-   ✓ Loaded 4321 characters from ./data/master.tex
+Example URLs:
+- LinkedIn: `https://www.linkedin.com/jobs/search/?keywords=python%20developer`
+- Indeed: `https://www.indeed.com/jobs?q=software+engineer`
 
-🔍 Fetching job description...
-   Source: job_description.txt
-   ✓ Retrieved 543 characters
+### Step 3: Discover Jobs
 
-🤖 Tailoring resume with Gemini Pro...
-   (This may take 10-30 seconds...)
-   ✓ Received tailored resume (4198 characters)
+1. Click **Refresh Suggestions**
+2. Watch the progress panel:
+   - Sources being scanned
+   - Jobs found and scored
+3. Wait for completion
 
-📄 Compiling LaTeX to PDF...
-✓ LaTeX file written to: output/tailored_resume.tex
-Compiling to PDF...
-✓ PDF compiled successfully
-✓ PDF saved as: output/Resume_TechCorp_2024-12-04.pdf
-✓ Auxiliary files cleaned up
+### Step 4: Review & Apply
 
-============================================================
-                        🎉 Success!                        
-============================================================
+For each suggested job:
+- **Score** (0-100): Higher = better match
+- **Apply**: Generate tailored resume
+- **Dismiss**: Remove from suggestions
 
-Resume saved to: D:\job-auto-apply\backend\services\resume-tailor\output\Resume_TechCorp_2024-12-04.pdf
-```
+### Step 5: Track Applications
 
-### 6. Check Your Output
-
-Open `output/Resume_TechCorp_2024-12-04.pdf` to see your tailored resume!
-
-## Next Steps
-
-### Tailor from URL
-```bash
-docker-compose run tailor --url "https://www.linkedin.com/jobs/view/12345"
-```
-
-### Use Custom Output Name
-```bash
-docker-compose run tailor --file job.txt --output "Google_L4_SWE"
-```
-
-### Run Without Docker (if you have TeX Live installed)
-```bash
-python main.py --file job_description.txt
-```
+Go to **Dashboard** to:
+- See all applied jobs
+- Check status (Processing → Applied)
+- Download tailored PDFs
 
 ## Common Issues
 
-**"pdflatex not found"**
-- You're probably running `python main.py` instead of `docker-compose run tailor`
-- Docker includes TeX Live automatically
+**"Connection refused"**
+- Make sure `docker-compose up` is running
+- Wait for all services to start (check logs)
 
 **"GOOGLE_API_KEY not found"**
 - Make sure you edited `.env` (not `.env.example`)
-- No quotes needed around the API key
+- Restart services: `docker-compose restart tailor`
 
-**"Failed to fetch URL"**
-- Some job sites block scrapers
-- Save the job description manually and use `--file` instead
+**"No jobs found"**
+- Check if the source URL returns search results in a browser
+- Some sites block automated requests
+- Try a different job board
 
-## Tips
+**PDF download fails**
+- Check the job status on Dashboard
+- Look for error messages
+- Check tailor service logs: `docker-compose logs tailor`
 
-- Always review the generated resume before submitting
+## Next Steps
+
+- Add more job sources for broader coverage
+- Refine your global filter for better matches
 - Keep your master resume comprehensive and up-to-date
-- Use specific company names with `--output` for better organization
-- The tool preserves your original `master.tex` - it's never modified
+- Review tailored resumes before submitting applications
 
 ## Help
 
-Run with `--help` to see all options:
-```bash
-docker-compose run tailor --help
-```
-
-Or check the full [README.md](README.md) for detailed documentation.
+- [Full Documentation](README.md)
+- [API Specification](spec.md)
+- [Project Architecture](../../../README.md)

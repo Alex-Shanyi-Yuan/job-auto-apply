@@ -1,242 +1,166 @@
-# Resume Tailor - LaTeX Resume Automation with Gemini Pro
+# Resume Tailor Service
 
-A CLI tool that automatically tailors your LaTeX resume to match specific job descriptions using Google's Gemini Pro AI.
+The core backend service for AutoCareer - handles AI job discovery, scoring, and resume tailoring.
 
 ## Features
 
-- 🤖 **AI-Powered Tailoring**: Uses Google Gemini Pro to intelligently adapt your resume
+- 🔍 **AI Job Discovery**: Automatically find jobs from configured sources using Gemini Pro
+- 📊 **Smart Scoring**: AI-powered relevance scoring (0-100) based on your resume
+- 🤖 **AI-Powered Tailoring**: Intelligently adapt your resume for each job
 - 📄 **LaTeX Support**: Works with your existing LaTeX resume templates
-- 🌐 **Flexible Input**: Fetch job descriptions from URLs, files, or direct text
-- 🐳 **Dockerized**: Includes all dependencies (Python + TeX Live) in one container
-- 📊 **Smart Extraction**: Automatically detects company names for file naming
-- 🎯 **Focused Output**: Generates clean PDFs with automatic cleanup of auxiliary files
+- 🐳 **Dockerized**: All dependencies (Python + TeX Live) in one container
+- 🌐 **REST API**: Full API for frontend integration
+- ⚡ **Parallel Processing**: Scan multiple sources and jobs concurrently
+- 📝 **Detailed Reports**: Per-source scan results with skip reasons
 
-## Quick Start
+## Quick Start (Web Mode)
 
-### Option 1: Using Docker (Recommended)
+The recommended way to run this service is as part of the full AutoCareer stack:
 
-1. **Build the container**
-   ```bash
-   cd backend/services/resume-tailor
-   docker-compose build
-   ```
-
-2. **Set up your API key**
-   ```bash
-   cp .env.example .env
-   # Edit .env and add your GOOGLE_API_KEY
-   ```
-
-3. **Add your master resume**
-   - Place your LaTeX resume at `data/master.tex`
-   - Or edit the provided sample template
-
-4. **Run the tool**
-   ```bash
-   # From a URL
-   docker-compose run --rm tailor --url "https://jobs.example.com/posting"
-   
-   # From a file
-   docker-compose run --rm tailor --file "job_description.txt"
-   
-   # With custom output name
-   docker-compose run --rm tailor --url "https://..." --output "GoogleSRE"
-   ```
-
-### Option 2: Local Installation
-
-1. **Prerequisites**
-   - Python 3.11+
-   - TeX Live (or MacTeX/MiKTeX) installed with `pdflatex` in PATH
-
-2. **Install dependencies**
-   ```bash
-   cd backend/services/resume-tailor
-   pip install -r requirements.txt
-   ```
-
-3. **Configure**
-   ```bash
-   copy .env.example .env
-   # Edit .env with your GOOGLE_API_KEY
-   ```
-
-4. **Run**
-   ```bash
-   python main.py --url "https://jobs.example.com/posting"
-   ```
-
-## Usage Examples
-
-### Basic Usage
 ```bash
-# Tailor resume from job URL
-python main.py --url "https://www.linkedin.com/jobs/view/12345"
+# From the project root
+cd /path/to/job-auto-apply
+docker-compose up --build
 
-# Use local job description file
-python main.py --file "job_posting.txt"
-
-# Direct text input
-python main.py --text "Software Engineer at TechCorp. Requirements: Python, AWS..."
+# Access the web UI
+open http://localhost:3000
 ```
 
-### Advanced Options
+### Environment Setup
+
+Create a `.env` file:
 ```bash
-# Custom output filename
-python main.py --url "https://..." --output "Meta_E5_Backend"
+GOOGLE_API_KEY=your_gemini_api_key_here
+DATABASE_URL=postgresql://postgres:postgres@postgres:5432/autocareer
+SCRAPER_SERVICE_URL=http://scraper:8001
 
-# Use different master resume
-python main.py --url "https://..." --master "./data/resume_ml.tex"
-
-# Keep auxiliary LaTeX files for debugging
-python main.py --url "https://..." --no-cleanup
-
-# Custom output directory
-python main.py --url "https://..." --output-dir "./custom_output"
+# Optional performance tuning
+RATE_LIMIT_DELAY=0.2        # Seconds between job scrapes (default: 0.2)
+MAX_CONCURRENT_SOURCES=5    # Max parallel source scans (default: 5)
+MAX_CONCURRENT_JOBS=10      # Max parallel job scrapes per source (default: 10)
 ```
+
+Get your Gemini API key from: https://makersuite.google.com/app/apikey
+
+## API Overview
+
+### Job Discovery & Suggestions
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/sources` | GET/POST | Manage job board sources |
+| `/sources/{id}` | PUT/DELETE | Update/delete sources |
+| `/suggestions` | GET | List AI-discovered jobs |
+| `/suggestions/refresh` | POST | Trigger new job scan |
+| `/suggestions/status` | GET | Get scan progress |
+
+### Resume Tailoring
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/apply` | POST | Start resume tailoring |
+| `/jobs` | GET | List all applied jobs |
+| `/jobs/{id}` | GET | Get job details |
+| `/jobs/{id}/pdf` | GET | Download tailored PDF |
+| `/jobs/{id}/dismiss` | POST | Dismiss a suggestion |
+
+### Settings
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/settings/global-filter` | GET/PUT | Global filter prompt |
+
+See [spec.md](spec.md) for complete API documentation.
+
+## AI Agents
+
+The service uses four specialized AI agents:
+
+| Agent | Purpose |
+|-------|---------|
+| `JobDiscoveryAgent` | Extracts job listings from search result HTML |
+| `JobScoringAgent` | Scores job-resume match (0-100) |
+| `JobParsingAgent` | Extracts requirements from job descriptions |
+| `ResumeTailorAgent` | Rewrites resume sections for each job |
 
 ## Project Structure
 
 ```
 resume-tailor/
 ├── core/                      # Core modules
-│   ├── __init__.py
+│   ├── agents.py             # AI Agents (Discovery, Scoring, Parsing, Tailoring)
 │   ├── jd_scraper.py         # Job description fetching
 │   ├── llm_client.py         # Gemini API integration
-│   ├── agents.py             # AI Agents (Parsing & Tailoring)
 │   ├── models.py             # Data models
 │   └── latex_compiler.py     # PDF compilation
+├── migrations/               # Alembic database migrations
+│   └── versions/
 ├── data/
-│   └── master.tex            # Your master resume (edit this!)
-├── output/                    # Generated PDFs and .tex files
-├── main.py                    # CLI entry point
-├── requirements.txt           # Python dependencies
-├── Dockerfile                 # Docker image definition
-├── docker-compose.yml         # Docker Compose config
-├── .env.example              # Environment template
-└── README.md                 # This file
+│   └── master.tex            # Your master resume template
+├── output/                   # Generated PDFs and .tex files
+├── server.py                 # FastAPI server (web mode)
+├── database.py               # SQLModel database layer
+├── main.py                   # CLI entry point
+├── requirements.txt
+├── Dockerfile
+└── README.md
+```
+
+## Database Schema
+
+The service uses PostgreSQL with three tables:
+
+- **`settings`**: Key-value store (global filter, etc.)
+- **`jobsource`**: Job board search URLs and filters
+- **`job`**: Applications with status, score, and PDF paths
+
+Run migrations:
+```bash
+# Inside the container
+alembic upgrade head
 ```
 
 ## Configuration
 
 ### Environment Variables
 
-Create a `.env` file with:
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `GOOGLE_API_KEY` | Gemini API key | Required |
+| `DATABASE_URL` | PostgreSQL connection | Required |
+| `SCRAPER_SERVICE_URL` | Scraper service URL | `http://scraper:8001` |
+| `MASTER_RESUME_PATH` | Path to LaTeX template | `./data/master.tex` |
+
+## CLI Mode (Optional)
+
+You can also run the tailor as a standalone CLI tool:
 
 ```bash
-GOOGLE_API_KEY=your_gemini_api_key_here
+# From URL
+docker-compose run --rm tailor --url "https://jobs.example.com/posting"
+
+# From file
+docker-compose run --rm tailor --file "job_description.txt"
+
+# With custom output name
+docker-compose run --rm tailor --url "https://..." --output "GoogleSRE"
 ```
-
-Get your API key from: https://makersuite.google.com/app/apikey
-
-### Master Resume Template
-
-Your `data/master.tex` should be a complete, valid LaTeX document. The AI will:
-- Analyze the job description
-- Identify relevant skills and experience
-- Rewrite sections to emphasize matching qualifications
-- Maintain your LaTeX formatting and structure
-
-## How It Works
-
-1. **Fetch Job Description**: Scrapes job posting URL or reads from file
-2. **Load Master Resume**: Reads your LaTeX resume template
-3. **AI Tailoring**: Sends both to Gemini Pro with tailoring instructions
-4. **Compile PDF**: Runs `pdflatex` to generate final PDF
-5. **Save Output**: Names file based on company name and date
-
-## API Key Setup
-
-### Getting a Gemini API Key
-
-1. Visit https://makersuite.google.com/app/apikey
-2. Sign in with your Google account
-3. Click "Create API Key"
-4. Copy the key to your `.env` file
-
-### Free Tier Limits
-
-- 60 requests per minute
-- Sufficient for personal use
-- No credit card required
 
 ## Troubleshooting
 
 ### "pdflatex not found"
-
-**Docker**: Make sure you're using `docker-compose run tailor` (not `python main.py` directly)
-
-**Local**: Install TeX Live:
-- **Ubuntu/Debian**: `sudo apt-get install texlive-latex-extra`
-- **macOS**: Install MacTeX from https://www.tug.org/mactex/
-- **Windows**: Install MiKTeX from https://miktex.org/
+Use Docker - it includes TeX Live automatically.
 
 ### "GOOGLE_API_KEY not found"
-
-Make sure:
-1. You created `.env` file (not `.env.example`)
-2. The key is on the line `GOOGLE_API_KEY=your_actual_key`
-3. No quotes around the key value
+Make sure you created `.env` (not `.env.example`) with your actual key.
 
 ### "LaTeX compilation failed"
-
-Check the `.log` file in `output/` for details. Common issues:
-- Missing LaTeX packages (install `texlive-latex-extra`)
-- Invalid LaTeX syntax in your master resume
-- Special characters not properly escaped
+Check `output/*.log` for details. Common issues:
+- Missing LaTeX packages
+- Invalid LaTeX syntax in master resume
 
 ### "Failed to fetch URL"
+Some sites block scrapers. Save the job description manually and use `--file`.
 
-- Check your internet connection
-- Some job sites block automated requests
-- Try saving the job description to a text file and use `--file` instead
+## Related Documentation
 
-## Development
-
-### Running Tests
-
-```bash
-# Test job scraper
-python -m core.jd_scraper
-
-# Test Gemini client (requires API key)
-python -m core.llm_client
-
-# Test LaTeX compiler (requires pdflatex)
-python -m core.latex_compiler
-```
-
-### Code Structure
-
-- **jd_scraper.py**: Handles fetching and cleaning job descriptions
-- **llm_client.py**: Manages Gemini API calls with retry logic
-- **latex_compiler.py**: LaTeX compilation and file management
-- **main.py**: CLI orchestration and user interface
-
-## Tips for Best Results
-
-1. **Quality Master Resume**: Start with a comprehensive, well-formatted LaTeX resume
-2. **Full Job Descriptions**: Provide complete JDs with requirements and responsibilities
-3. **Review Output**: Always review the tailored resume before submitting
-4. **Iterate**: You may need to adjust your master resume based on results
-5. **Keep Backups**: The tool doesn't modify your master resume
-
-## Contributing
-
-Found a bug or have a feature request? Please open an issue or submit a pull request.
-
-## License
-
-MIT
-
-## Related Projects
-
-- [AutoCareer Main Project](../../../README.md) - Full job application automation SaaS
-- Frontend interface coming soon!
-
-## Support
-
-For questions or issues:
-1. Check the [Troubleshooting](#troubleshooting) section
-2. Review the [spec.md](../../../spec.md) for detailed architecture
-3. Open an issue on GitHub
+- [API Specification](spec.md) - Complete endpoint documentation
+- [Project README](../../../README.md) - Full system architecture
+- [Quick Start](QUICKSTART.md) - 5-minute setup guide

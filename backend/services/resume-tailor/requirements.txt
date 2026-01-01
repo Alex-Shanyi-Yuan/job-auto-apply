@@ -11,4 +11,5 @@ uvicorn
 sqlmodel
 psycopg2-binary
 httpx
+alembic>=1.13.0
 

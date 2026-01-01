@@ -1,7 +1,119 @@
-from typing import Optional
+from typing import Optional, List
 import time
 from .llm_client import GeminiClient
-from .models import JobPosting
+from .models import JobPosting, DiscoveryResult, DiscoveredJob, JobScore
+
+
+class JobDiscoveryAgent:
+    """Agent responsible for discovering jobs from search result pages."""
+    
+    def __init__(self, client: Optional[GeminiClient] = None):
+        self.client = client or GeminiClient()
+    
+    def discover(self, html_content: str, filter_prompt: str) -> List[DiscoveredJob]:
+        """
+        Parse HTML from a job board search page and extract matching job listings.
+        
+        Args:
+            html_content: Cleaned HTML from a job board search results page
+            filter_prompt: User's criteria for filtering jobs (e.g., "Remote Python developer roles")
+            
+        Returns:
+            List of discovered job listings that match the filter criteria
+        """
+        # Truncate HTML if too long (keep first ~40k chars to leave room for prompt)
+        max_html_length = 40000
+        if len(html_content) > max_html_length:
+            html_content = html_content[:max_html_length] + "\n... (content truncated)"
+        
+        prompt = f"""You are a job discovery agent. Analyze the following HTML content from a job board search results page.
+
+Your task:
+1. Extract ALL job listings visible on the page
+2. For each job, extract: title, company name, and the direct URL to the job posting
+3. Filter the results to only include jobs matching this criteria: "{filter_prompt}"
+4. If a URL is relative (starts with /), keep it as-is (we will resolve it later)
+5. Only include jobs where you can find a valid URL link
+
+Important:
+- Look for patterns like job cards, list items, or repeated structures that contain job info
+- The URL should lead to the individual job posting, not the search results
+- If company name is not visible, use "Unknown Company"
+- Be thorough - extract ALL matching jobs you can find
+
+HTML Content:
+{html_content}
+
+Return the matching jobs as a structured JSON object."""
+
+        try:
+            result = self.client.generate_structured(
+                prompt=prompt,
+                response_schema=DiscoveryResult,
+                temperature=0.1
+            )
+            return result.jobs
+        except Exception as e:
+            print(f"Error in job discovery: {e}")
+            return []
+
+
+class JobScoringAgent:
+    """Agent responsible for scoring job matches based on resume fit."""
+    
+    def __init__(self, client: Optional[GeminiClient] = None):
+        self.client = client or GeminiClient()
+    
+    def score(self, job_description: str, master_resume: str) -> JobScore:
+        """
+        Score how well a job matches the candidate's background.
+        
+        The score represents the likelihood of success after tailoring the resume,
+        not just a simple keyword match.
+        
+        Args:
+            job_description: Full text of the job posting
+            master_resume: The candidate's master resume (LaTeX or plain text)
+            
+        Returns:
+            JobScore with score (0-100) and reasoning
+        """
+        prompt = f"""You are an expert career advisor and resume analyst.
+
+Analyze how well this candidate would fit the job posting, considering:
+1. Skills match (both explicit and transferable skills)
+2. Experience level alignment
+3. Industry/domain relevance
+4. Potential for resume tailoring to highlight relevant experience
+
+The score should reflect the candidate's chances of getting an interview AFTER we tailor their resume to this specific job.
+
+Scoring guide:
+- 90-100: Excellent match, nearly all requirements met, strong background
+- 70-89: Good match, most key requirements met, some tailoring needed
+- 50-69: Moderate match, has relevant transferable skills
+- 30-49: Weak match, significant gaps but some relevant experience
+- 0-29: Poor match, missing critical requirements
+
+JOB DESCRIPTION:
+{job_description[:8000]}
+
+CANDIDATE'S MASTER RESUME:
+{master_resume[:6000]}
+
+Provide a score and brief reasoning (2-3 sentences)."""
+
+        try:
+            result = self.client.generate_structured(
+                prompt=prompt,
+                response_schema=JobScore,
+                temperature=0.2
+            )
+            return result
+        except Exception as e:
+            print(f"Error scoring job: {e}")
+            return JobScore(score=50, reasoning="Unable to analyze - defaulting to moderate score")
+
 
 class JobParsingAgent:
     """Agent responsible for parsing raw job descriptions into structured data."""
