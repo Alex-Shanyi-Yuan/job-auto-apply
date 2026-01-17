@@ -270,10 +270,10 @@ async def process_application(job_id: int, url: str):
                 raw_text = data["text"]
             logger.debug("Scraping completed successfully")
             
-            # 2. Parse
+            # 2. Parse (run in thread to avoid blocking event loop)
             logger.debug("Parsing job description")
             parsing_agent = JobParsingAgent()
-            job_posting = parsing_agent.parse(raw_text)
+            job_posting = await asyncio.to_thread(parsing_agent.parse, raw_text)
             
             # Update job details
             job.company = job_posting.company_name
@@ -284,19 +284,20 @@ async def process_application(job_id: int, url: str):
             session.commit()
             logger.info(f"Job parsed: {job.company} - {job.title}")
             
-            # 3. Tailor
+            # 3. Tailor (run in thread to avoid blocking event loop)
             logger.debug("Tailoring resume")
             master_latex = load_master_resume(MASTER_RESUME_PATH)
             tailor_agent = ResumeTailorAgent()
-            tailored_latex = tailor_agent.tailor(master_latex, job_posting)
+            tailored_latex = await asyncio.to_thread(tailor_agent.tailor, master_latex, job_posting)
             
-            # 4. Compile
+            # 4. Compile (run in thread to avoid blocking event loop)
             logger.debug("Compiling PDF")
             # Sanitize company name and job title for filename
             company_name = "".join(c for c in job_posting.company_name if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_')
             job_title = "".join(c for c in job_posting.job_title if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_')
             
-            pdf_path = compile_pdf(
+            pdf_path = await asyncio.to_thread(
+                compile_pdf,
                 latex_content=tailored_latex,
                 output_dir="./output",
                 company_name=company_name,

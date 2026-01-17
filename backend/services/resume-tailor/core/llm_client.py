@@ -125,7 +125,12 @@ class GeminiClient:
         raise Exception(f"Failed to generate structured content after {max_retries} attempts")
 
     def _handle_retry(self, attempt: int, max_retries: int, error: Exception):
-        """Handle retry logic with exponential backoff."""
+        """Handle retry logic with exponential backoff.
+        
+        Note: Uses time.sleep() which is blocking, but since the entire
+        generate_content/generate_structured call is wrapped in asyncio.to_thread()
+        in the calling code, this won't block the event loop.
+        """
         if attempt < max_retries - 1:
             wait_time = 2 ** attempt
             print(f"Retry {attempt + 1}/{max_retries} after error: {str(error)}")

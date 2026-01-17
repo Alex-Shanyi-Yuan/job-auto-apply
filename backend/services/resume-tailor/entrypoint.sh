@@ -26,4 +26,7 @@ echo "Running database migrations..."
 alembic upgrade head
 
 echo "Starting FastAPI server..."
-exec uvicorn server:app --host 0.0.0.0 --port 8000
+# Use multiple workers for parallel request handling
+# Note: Background tasks run in the same process, so we also use asyncio.to_thread()
+# for blocking operations to avoid blocking other requests within the same worker
+exec uvicorn server:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS:-2}
