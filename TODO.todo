@@ -2,10 +2,16 @@ assign different agents to different models
 
 review the comments and code
 
-dashboard make it display by dates and hide the jobs not within a display
+debug netflex (link doesnt work) & spotify & Microsoft Canada job finding
 
-indipendent job source parsing + figure out why microsoft is not working
+confirm global filter not getting applied is fixed
 
-double check the scoring logic
+uber jobs sites loading error
 
-debug netflex & spotify job finding
+resume generation blocks backend from running
+
+google link to actual job still doesnt work
+
+timezone issue pass 7:31 pm counted as the next day?
+
+resume tailor logic make it based on json experience based structure
