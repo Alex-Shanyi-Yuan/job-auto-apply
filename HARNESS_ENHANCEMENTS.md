@@ -10,7 +10,9 @@ These corrections were applied after validating against the current repository:
 
 - `jobs/[id]/page.tsx` does **not** poll every 2 seconds today; it fetches once on mount and then remains static while status is `processing`.
 - `process_application()` already uses `asyncio.to_thread(...)` for parse/tailor/compile steps, so those steps are not directly blocking the uvicorn event loop.
-- The frontend imports `@/lib/api`, but `frontend/lib/api.ts` is not currently present in this workspace tree. Treat API helper updates below as: **create or restore** `frontend/lib/api.ts` first.
+- `frontend/lib/api.ts` is now present and used by dashboard/apply/jobs/suggestions pages.
+- LLM provider seam is implemented with `LLMProvider`, `GeminiProvider`, and `StubProvider`; default runtime mode is real Gemini unless `RESUME_TAILOR_LLM_MODE` is set to `stub|test|offline`.
+- Scraper plugin framework is implemented with domain manifests and registry routing for Google, LinkedIn, Netflix, Jane Street, OpenAI, and Anthropic.
 
 ---
 
@@ -18,9 +20,11 @@ These corrections were applied after validating against the current repository:
 
 **Priority: 0 | Impact: High | Effort: Small**
 
+### Implementation Status (Apr 2026): Completed
+
 ### Problem (Current State)
 
-Multiple frontend pages import `@/lib/api`, but the repository currently has no visible `frontend/lib/api.ts` file. This blocks clean implementation of most enhancements that add endpoints or streaming helpers.
+This prerequisite was completed. The shared client exists at `frontend/lib/api.ts` and exports typed helpers used by existing frontend pages.
 
 ### What to Build
 
@@ -42,6 +46,11 @@ Create `frontend/lib/api.ts` as the typed API surface for all backend calls curr
 
 - `frontend/lib/` (new directory)
 - `frontend/lib/api.ts` (new file)
+
+### Implemented
+
+- Typed DTOs and wrappers were added for jobs, sources, suggestions, scan status, and settings.
+- Base URL handling is centralized through `NEXT_PUBLIC_API_URL` fallback logic.
 
 ### Expected Impact
 
@@ -250,9 +259,21 @@ Add a lightweight hook system to the agent pipeline: pre-call hooks validate inp
 
 **Priority: 3 | Impact: High | Effort: Medium**
 
+### Implementation Status (Apr 2026): Partially Implemented
+
+- Implemented:
+  - `LLMProvider` abstraction in `core/llm_providers.py`
+  - `GeminiProvider` for real runtime calls
+  - `StubProvider` for deterministic local/test mode
+  - Agent constructors now accept provider abstraction and default via `create_default_provider()`
+- Not yet implemented:
+  - `ClaudeProvider` and `OpenAIProvider`
+  - Model registry and per-agent model selection settings
+  - Provider failover chain and settings UI for model routing
+
 ### Problem (Current State)
 
-`llm_client.py` hardcodes `gemini-3-flash-preview` (line 38) and only supports Google Gemini via the `google-genai` library. If the Gemini API is down, the entire platform stops. Different agents have different needs — scoring should be cheap/fast (Haiku-class), tailoring should be best quality (Sonnet/Opus-class). There is no way to assign different models to different agents (TODO item #1 in `TODO.todo`).
+The system no longer hardcodes all agent calls through one direct client path. It now uses an LLM provider seam with a real Gemini provider and a deterministic stub mode. However, cross-vendor support (Claude/OpenAI), per-agent model routing, and automatic provider failover are still pending.
 
 ### Harness Concept Applied
 
@@ -422,9 +443,22 @@ Track tokens per agent call, store on the `Job` record, and surface totals in th
 
 **Priority: 5 | Impact: High | Effort: Large**
 
+### Implementation Status (Apr 2026): Partially Implemented
+
+- Implemented:
+  - Plugin manifest schema and registry loading
+  - Generic fallback plugin
+  - Domain plugin packages for Google, LinkedIn, Netflix, Jane Street, OpenAI, Anthropic
+  - Tailor-side URL resolver coverage for the same domains
+  - Deterministic unit tests for registry selection and resolver behavior
+- Not yet implemented:
+  - Site-specialized extractors beyond generic delegation
+  - Plugin error telemetry surfaced in `/suggestions/status`
+  - Rich per-plugin health reporting in frontend scan UX
+
 ### Problem (Current State)
 
-The scraper service is a single Playwright-based `POST /scrape` endpoint. Every job site gets the same treatment regardless of its structure. TODO items call out Netflix, Spotify, Microsoft Canada, Uber, and Google as broken. The root cause differs per site:
+The plugin architecture is in place, but most new site plugins currently delegate extraction/resolution to generic behavior. This means routing coverage is improved while deep site-specific extraction quality is still an open optimization phase.
 
 - LinkedIn requires login
 - Google Jobs has dynamic URL rewrites
