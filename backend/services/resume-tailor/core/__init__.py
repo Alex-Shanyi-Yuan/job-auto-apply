@@ -2,16 +2,16 @@
 Resume Tailor Core Modules
 """
 
-from .jd_scraper import fetch_job_description, scrape_and_parse
-from .llm_client import GeminiClient
+from .llm_providers import LLMProvider, GeminiProvider, StubProvider, create_default_provider
 from .latex_compiler import compile_pdf
 from .agents import JobParsingAgent, ResumeTailorAgent, JobDiscoveryAgent, JobScoringAgent
 from .models import JobPosting, DiscoveredJob, DiscoveryResult, JobScore
 
 __all__ = [
-    'fetch_job_description', 
-    'scrape_and_parse',
-    'GeminiClient',
+    'LLMProvider',
+    'GeminiProvider',
+    'StubProvider',
+    'create_default_provider',
     'compile_pdf',
     'JobParsingAgent',
     'ResumeTailorAgent',

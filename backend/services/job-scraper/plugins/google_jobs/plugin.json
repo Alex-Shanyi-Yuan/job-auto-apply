@@ -1,0 +1,9 @@
+{
+  "name": "google_jobs",
+  "version": "1.0.0",
+  "domains": ["google.com", "www.google.com"],
+  "extractor_module": "extractor",
+  "resolver_module": "resolver",
+  "pagination_strategy": "none",
+  "requires_login": false
+}

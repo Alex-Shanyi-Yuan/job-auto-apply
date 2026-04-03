@@ -14,7 +14,16 @@ from database import SQLModel, Job, JobSource
 config = context.config
 
 # Override sqlalchemy.url with environment variable if available
-database_url = os.getenv("DATABASE_URL", "postgresql://user:password@postgres:5432/autocareer")
+backend = (os.getenv("DATABASE_BACKEND") or "postgres").strip().lower()
+postgres_url = os.getenv("POSTGRES_DATABASE_URL") or os.getenv("DATABASE_URL") or "postgresql://user:password@postgres:5432/autocareer"
+sqlite_url = os.getenv("SQLITE_DATABASE_URL") or "sqlite:///./data/autocareer.db"
+
+# Hybrid runtime writes to SQLite and syncs with PostgreSQL when available.
+if backend in {"sqlite", "hybrid"}:
+    database_url = sqlite_url
+else:
+    database_url = postgres_url
+
 config.set_main_option("sqlalchemy.url", database_url)
 
 # Interpret the config file for Python logging.

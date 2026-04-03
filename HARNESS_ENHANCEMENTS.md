@@ -4,6 +4,52 @@ This document maps concepts from the Claw Code Harness (`claw-code-main`) to con
 
 ---
 
+## Reality-Checked Notes (Apr 2026)
+
+These corrections were applied after validating against the current repository:
+
+- `jobs/[id]/page.tsx` does **not** poll every 2 seconds today; it fetches once on mount and then remains static while status is `processing`.
+- `process_application()` already uses `asyncio.to_thread(...)` for parse/tailor/compile steps, so those steps are not directly blocking the uvicorn event loop.
+- The frontend imports `@/lib/api`, but `frontend/lib/api.ts` is not currently present in this workspace tree. Treat API helper updates below as: **create or restore** `frontend/lib/api.ts` first.
+
+---
+
+## Prerequisite 0: Restore/Create Shared Frontend API Client
+
+**Priority: 0 | Impact: High | Effort: Small**
+
+### Problem (Current State)
+
+Multiple frontend pages import `@/lib/api`, but the repository currently has no visible `frontend/lib/api.ts` file. This blocks clean implementation of most enhancements that add endpoints or streaming helpers.
+
+### What to Build
+
+Create `frontend/lib/api.ts` as the typed API surface for all backend calls currently consumed by:
+
+- `app/suggestions/page.tsx`
+- `app/dashboard/page.tsx`
+- `app/jobs/[id]/page.tsx`
+- `app/apply/page.tsx`
+
+### Actionable Items
+
+1. Add typed DTOs (`Job`, `JobSource`, scan status, settings payloads).
+2. Centralize base URL logic (`NEXT_PUBLIC_API_URL`).
+3. Add fetch wrappers for all existing routes.
+4. Add placeholders for upcoming routes (`/jobs/{id}/stream`, `/health`, `/jobs/{id}/audit`, model settings).
+
+### Files to Modify
+
+- `frontend/lib/` (new directory)
+- `frontend/lib/api.ts` (new file)
+
+### Expected Impact
+
+- Unblocks implementation of Features 1, 4, 7, 8, 9, 11.
+- Prevents duplicated endpoint logic across pages.
+
+---
+
 ## How to Read This Document
 
 - **Impact** = how much the feature improves the user experience or system reliability
@@ -19,7 +65,7 @@ This document maps concepts from the Claw Code Harness (`claw-code-main`) to con
 
 ### Problem (Current State)
 
-The frontend polls `GET /suggestions/status` every 1.5 seconds and `GET /jobs/{id}` every 2 seconds during resume tailoring. This is inefficient and introduces latency. Long-running resume tailoring (~10–30 seconds) shows no step-by-step progress. The resume compilation step completely blocks the backend uvicorn event loop (`server.py` line 302: `await asyncio.to_thread(compile_pdf, ...)`).
+The frontend polls `GET /suggestions/status` every 1.5 seconds, while `jobs/[id]/page.tsx` does not poll or stream progress at all. Long-running resume tailoring (~10–30 seconds) shows no step-by-step progress to the user. Backend processing runs in background tasks and thread offload, but there is no push channel for intermediate pipeline state.
 
 ### Harness Concept Applied
 
@@ -29,15 +75,16 @@ The harness streams `AssistantEvent` tokens from the API client (`conversation.r
 
 **Backend:** Add a `GET /jobs/{job_id}/stream` SSE endpoint that emits pipeline step events as the background task progresses.
 
-**Frontend:** Replace the 2-second polling interval on `jobs/[id]/page.tsx` with an `EventSource` connection to the stream endpoint.
+**Frontend:** Add an `EventSource` connection on `jobs/[id]/page.tsx` to receive progress updates in real time.
 
 ### Actionable Items
 
 1. **Add pipeline event bus** — Create `backend/services/resume-tailor/core/events.py`:
+
    ```python
    # Per-job asyncio.Queue for pipeline step events
    job_event_queues: dict[int, asyncio.Queue] = {}
-   
+
    async def emit(job_id: int, step: str, detail: str = ""):
        if job_id in job_event_queues:
            await job_event_queues[job_id].put({"step": step, "detail": detail})
@@ -52,6 +99,7 @@ The harness streams `AssistantEvent` tokens from the API client (`conversation.r
    - On error: `"failed"`
 
 3. **Add SSE route** in `server.py`:
+
    ```python
    @app.get("/jobs/{job_id}/stream")
    async def stream_job_progress(job_id: int):
@@ -66,13 +114,14 @@ The harness streams `AssistantEvent` tokens from the API client (`conversation.r
        return StreamingResponse(generator(), media_type="text/event-stream")
    ```
 
-4. **Update `jobs/[id]/page.tsx`** — Replace `setInterval` polling with `EventSource`:
+4. **Update `jobs/[id]/page.tsx`** — add `EventSource` stream subscription (currently no polling exists):
+
    ```typescript
    const es = new EventSource(`${API_BASE}/jobs/${id}/stream`);
    es.onmessage = (e) => {
      const event = JSON.parse(e.data);
      setCurrentStep(event.step);
-     if (event.step === 'pdf_compiled' || event.step === 'failed') {
+     if (event.step === "pdf_compiled" || event.step === "failed") {
        es.close();
        loadJob();
      }
@@ -84,15 +133,17 @@ The harness streams `AssistantEvent` tokens from the API client (`conversation.r
 6. **Add `lib/api.ts`** helper: `streamJobProgress(jobId, onStep)`.
 
 ### Files to Modify
+
 - `backend/services/resume-tailor/server.py` (lines 255–320, plus new route)
 - `backend/services/resume-tailor/core/` (new `events.py`)
 - `frontend/app/jobs/[id]/page.tsx`
 - `frontend/lib/api.ts`
 
 ### Expected Impact
-- Eliminates 2-second polling lag on the most user-facing flow
+
+- Eliminates stale status lag on the most user-facing flow
 - Makes resume tailoring feel responsive (users see "Analyzing requirements..." in <1s)
-- Removes the only busy-wait loop that currently blocks UX feedback
+- Replaces static waiting with live progress events during processing
 - Unblocks the apply button — users know exactly where in the pipeline their job is
 
 ---
@@ -116,40 +167,41 @@ Add a lightweight hook system to the agent pipeline: pre-call hooks validate inp
 ### Actionable Items
 
 1. **Create `backend/services/resume-tailor/core/hooks.py`**:
+
    ```python
    from enum import Enum
    from dataclasses import dataclass
    from typing import Callable, Optional
-   
+
    class HookOutcome(Enum):
        ALLOW = "allow"
        DENY  = "deny"
        WARN  = "warn"
-   
+
    @dataclass
    class HookResult:
        outcome: HookOutcome
        message: str = ""
-   
+
    # Hook signature: (agent_name, input_data) -> HookResult
    PreHook  = Callable[[str, dict], HookResult]
    PostHook = Callable[[str, dict, str], HookResult]  # name, input, output
-   
+
    class AgentHookRunner:
        def __init__(self):
            self._pre: list[PreHook] = []
            self._post: list[PostHook] = []
-   
+
        def register_pre(self, hook: PreHook): self._pre.append(hook)
        def register_post(self, hook: PostHook): self._post.append(hook)
-   
+
        def run_pre(self, agent: str, input_data: dict) -> HookResult:
            for hook in self._pre:
                result = hook(agent, input_data)
                if result.outcome == HookOutcome.DENY:
                    return result
            return HookResult(HookOutcome.ALLOW)
-   
+
        def run_post(self, agent: str, input_data: dict, output: str) -> HookResult:
            for hook in self._post:
                result = hook(agent, input_data, output)
@@ -164,6 +216,7 @@ Add a lightweight hook system to the agent pipeline: pre-call hooks validate inp
    - **Post-hook: `log_agent_output`** — write agent name + truncated output to a structured log for debugging
 
 3. **Wrap agent calls in `process_application()`** (`server.py` lines 283–305):
+
    ```python
    pre = hook_runner.run_pre("ResumeTailorAgent", {"job_title": job.title})
    if pre.outcome == HookOutcome.DENY:
@@ -179,11 +232,13 @@ Add a lightweight hook system to the agent pipeline: pre-call hooks validate inp
 5. **Expose hook registration in settings** (future): allow users to add custom Python hook scripts from the UI.
 
 ### Files to Modify
+
 - `backend/services/resume-tailor/core/` (new `hooks.py`)
 - `backend/services/resume-tailor/server.py` (lines 255–320)
 - `backend/services/resume-tailor/core/agents.py`
 
 ### Expected Impact
+
 - Reduces `status="failed"` jobs caused by bad LaTeX output (currently the #1 failure mode)
 - Adds observability to every agent call — debugging becomes possible without reading logs line by line
 - Provides an extension point for custom validation without touching agent logic
@@ -210,23 +265,25 @@ Abstract `GeminiClient` behind an `LLMProvider` interface. Add `ClaudeProvider` 
 ### Actionable Items
 
 1. **Create `backend/services/resume-tailor/core/llm_providers.py`**:
+
    ```python
    from abc import ABC, abstractmethod
    from typing import Type, TypeVar
    T = TypeVar("T")
-   
+
    class LLMProvider(ABC):
        @abstractmethod
        def generate_text(self, prompt: str, temperature: float = 0.7) -> str: ...
        @abstractmethod
        def generate_structured(self, prompt: str, schema: Type[T], temperature: float = 0.1) -> T: ...
-   
+
    class GeminiProvider(LLMProvider): ...   # extract from llm_client.py
    class ClaudeProvider(LLMProvider): ...   # new: uses anthropic SDK
    class OpenAIProvider(LLMProvider): ...   # new: uses openai SDK
    ```
 
 2. **Add a `MODEL_REGISTRY` dict** (mirrors the harness's `MODEL_REGISTRY`):
+
    ```python
    MODEL_REGISTRY = {
        "gemini-flash": {"provider": "gemini", "model_id": "gemini-2.0-flash-exp"},
@@ -240,6 +297,7 @@ Abstract `GeminiClient` behind an `LLMProvider` interface. Add `ClaudeProvider` 
    ```
 
 3. **Per-agent model config** — add to `Settings` table or `.env`:
+
    ```
    DISCOVERY_AGENT_MODEL=gemini-flash
    SCORING_AGENT_MODEL=gemini-flash
@@ -248,6 +306,7 @@ Abstract `GeminiClient` behind an `LLMProvider` interface. Add `ClaudeProvider` 
    ```
 
 4. **Update `agents.py`** — constructor accepts `provider: LLMProvider` instead of using a shared client:
+
    ```python
    class ResumeTailorAgent:
        def __init__(self, provider: LLMProvider):
@@ -261,6 +320,7 @@ Abstract `GeminiClient` behind an `LLMProvider` interface. Add `ClaudeProvider` 
 7. **Fallback logic** — if primary provider fails, try secondary (similar to harness's `detect_provider_kind()` fallback chain).
 
 ### Files to Modify
+
 - `backend/services/resume-tailor/core/llm_client.py` (refactor into providers)
 - `backend/services/resume-tailor/core/` (new `llm_providers.py`)
 - `backend/services/resume-tailor/core/agents.py` (constructor change)
@@ -269,6 +329,7 @@ Abstract `GeminiClient` behind an `LLMProvider` interface. Add `ClaudeProvider` 
 - `frontend/app/suggestions/page.tsx` or new settings page
 
 ### Expected Impact
+
 - Resolves TODO #1: "assign different agents to different models"
 - Scoring agents use cheap/fast models ($0.001/job), tailoring uses best quality (worth the cost)
 - Platform resilience: Gemini outage no longer = total downtime
@@ -295,12 +356,13 @@ Track tokens per agent call, store on the `Job` record, and surface totals in th
 ### Actionable Items
 
 1. **Add token tracking to `llm_client.py`** — capture `response.usage_metadata` from Gemini (it's already in the response object, just not used):
+
    ```python
    @dataclass
    class TokenUsage:
        input_tokens: int = 0
        output_tokens: int = 0
-   
+
    # Return alongside content:
    def generate_content(self, prompt, ...) -> tuple[str, TokenUsage]:
        ...
@@ -312,6 +374,7 @@ Track tokens per agent call, store on the `Job` record, and surface totals in th
    ```
 
 2. **Add migration** — `004_add_token_usage_to_job.py`:
+
    ```python
    op.add_column('job', sa.Column('input_tokens', sa.Integer(), nullable=True))
    op.add_column('job', sa.Column('output_tokens', sa.Integer(), nullable=True))
@@ -323,6 +386,7 @@ Track tokens per agent call, store on the `Job` record, and surface totals in th
 4. **Accumulate usage in `process_application()`** across all 3 agent calls, save total to `Job`.
 
 5. **Add pricing lookup** (same pattern as harness):
+
    ```python
    MODEL_PRICING = {
        "gemini-flash": {"input": 0.075, "output": 0.30},    # per million tokens
@@ -336,6 +400,7 @@ Track tokens per agent call, store on the `Job` record, and surface totals in th
 7. **Add scan-level cost summary** to the scan report modal in `frontend/app/suggestions/page.tsx`.
 
 ### Files to Modify
+
 - `backend/services/resume-tailor/core/llm_client.py`
 - `backend/services/resume-tailor/database.py`
 - `backend/services/resume-tailor/migrations/versions/` (new migration)
@@ -345,6 +410,7 @@ Track tokens per agent call, store on the `Job` record, and surface totals in th
 - `frontend/app/suggestions/page.tsx`
 
 ### Expected Impact
+
 - Surfaces real API spend so users can tune model choices (connects to Feature 3)
 - Enables cost-per-application metric ("this resume tailoring cost $0.04")
 - Enables per-scan cost visibility ("found 47 jobs, scored 23, cost $0.12 total")
@@ -359,6 +425,7 @@ Track tokens per agent call, store on the `Job` record, and surface totals in th
 ### Problem (Current State)
 
 The scraper service is a single Playwright-based `POST /scrape` endpoint. Every job site gets the same treatment regardless of its structure. TODO items call out Netflix, Spotify, Microsoft Canada, Uber, and Google as broken. The root cause differs per site:
+
 - LinkedIn requires login
 - Google Jobs has dynamic URL rewrites
 - Company ATS portals have anti-bot JavaScript
@@ -377,6 +444,7 @@ A site plugin system where each job board has a manifest file declaring how to s
 ### Actionable Items
 
 1. **Define plugin manifest schema** — create `backend/services/job-scraper/plugins/plugin_schema.py`:
+
    ```python
    @dataclass
    class SitePluginManifest:
@@ -392,6 +460,7 @@ A site plugin system where each job board has a manifest file declaring how to s
    ```
 
 2. **Create plugin directory** — `backend/services/job-scraper/plugins/`:
+
    ```
    plugins/
      google_jobs/
@@ -423,12 +492,14 @@ A site plugin system where each job board has a manifest file declaring how to s
 7. **Add plugin health status** to `GET /suggestions/status` response — surface which sites had scraper errors.
 
 ### Files to Modify
+
 - `backend/services/job-scraper/main.py` (major refactor)
 - `backend/services/job-scraper/plugins/` (new directory)
 - `backend/services/resume-tailor/server.py` (lines 28–53, `resolve_job_url`)
 - `frontend/app/suggestions/page.tsx` (surface plugin errors)
 
 ### Expected Impact
+
 - Fixes TODOs: Netflix, Spotify, Microsoft Canada, Uber, Google (items 3, 5, 7)
 - Makes adding support for a new job site a self-contained task (add a plugin, no core changes)
 - Fixes URL resolution failures that currently make ~30% of discovered jobs unscrapeable
@@ -455,26 +526,27 @@ A `AgentPromptBuilder` class that constructs agent prompts in named sections. A 
 ### Actionable Items
 
 1. **Create `backend/services/resume-tailor/core/prompt_builder.py`**:
+
    ```python
    class AgentPromptBuilder:
        def __init__(self):
            self._sections: list[tuple[str, str]] = []
            self._context: dict = {}
-   
+
        def add_section(self, name: str, content: str) -> "AgentPromptBuilder":
            self._sections.append((name, content))
            return self
-   
+
        def with_context(self, **kwargs) -> "AgentPromptBuilder":
            self._context.update(kwargs)
            return self
-   
+
        def with_user_instructions(self, path: str = "./data/instructions.md") -> "AgentPromptBuilder":
            if os.path.exists(path):
                content = open(path).read()[:4000]  # match harness MAX_INSTRUCTION_FILE_CHARS
                self.add_section("User Instructions", content)
            return self
-   
+
        def build(self) -> str:
            rendered = []
            for name, content in self._sections:
@@ -485,9 +557,10 @@ A `AgentPromptBuilder` class that constructs agent prompts in named sections. A 
    ```
 
 2. **Create `backend/services/resume-tailor/data/instructions.md`** — editable by the user to inject personal context into every agent call:
+
    ```markdown
    # Personal Career Instructions
-   
+
    Target roles: Senior Software Engineer, Staff Engineer
    Preferred industries: FinTech, DevTools, Infrastructure
    Location preference: Remote or Toronto
@@ -496,6 +569,7 @@ A `AgentPromptBuilder` class that constructs agent prompts in named sections. A 
    ```
 
 3. **Refactor agent prompts** in `agents.py` to use `AgentPromptBuilder`:
+
    ```python
    prompt = (AgentPromptBuilder()
        .add_section("Task", "Tailor the following LaTeX resume for this job...")
@@ -513,6 +587,7 @@ A `AgentPromptBuilder` class that constructs agent prompts in named sections. A 
 6. **Add per-job-sector instruction sections** — detect industry from job title and inject sector-specific tips (e.g., finance: emphasize regulatory compliance, startup: emphasize breadth).
 
 ### Files to Modify
+
 - `backend/services/resume-tailor/core/agents.py`
 - `backend/services/resume-tailor/core/` (new `prompt_builder.py`)
 - `backend/services/resume-tailor/data/` (new `instructions.md`)
@@ -520,6 +595,7 @@ A `AgentPromptBuilder` class that constructs agent prompts in named sections. A 
 - `frontend/app/suggestions/page.tsx` or new settings page
 
 ### Expected Impact
+
 - Addresses TODO #9: "resume tailor logic make it based on json experience based structure" — `instructions.md` is the entry point
 - Makes agent prompts maintainable without touching Python source
 - Enables personalization without code changes (edit instructions.md)
@@ -546,12 +622,15 @@ Save a structured audit log for every job application pipeline run — exact pro
 ### Actionable Items
 
 1. **Add `audit_log` column** to `Job` in `database.py`:
+
    ```python
    audit_log: Optional[str] = None  # JSON: list of pipeline step records
    ```
+
    And migration `004_add_audit_log.py`.
 
 2. **Create `AuditEntry` dataclass** in `core/models.py`:
+
    ```python
    @dataclass
    class AuditEntry:
@@ -574,6 +653,7 @@ Save a structured audit log for every job application pipeline run — exact pro
 6. **Add audit view to `jobs/[id]/page.tsx`** — expandable "Pipeline Log" section showing each step, timing, and any errors. On failure, show the full error with context.
 
 ### Files to Modify
+
 - `backend/services/resume-tailor/database.py`
 - `backend/services/resume-tailor/migrations/versions/` (new file)
 - `backend/services/resume-tailor/server.py` (lines 255–320)
@@ -582,6 +662,7 @@ Save a structured audit log for every job application pipeline run — exact pro
 - `frontend/lib/api.ts`
 
 ### Expected Impact
+
 - Changes debugging from "why is status=failed?" to "here's exactly what broke and where"
 - Enables quality review: inspect the tailored LaTeX before compiling
 - Reduces failed jobs by catching LLM issues early (audit log feeds back into hooks in Feature 2)
@@ -612,6 +693,7 @@ A `dry_run` query parameter on key endpoints that runs the logic but does not pe
    - `POST /suggestions/refresh?dry_run=true` — scrape sources and return discovered jobs without scoring or saving
 
 2. **Implement dry-run logic** in `server.py`:
+
    ```python
    @app.post("/apply")
    async def apply(request: ApplyRequest, dry_run: bool = False):
@@ -630,12 +712,14 @@ A `dry_run` query parameter on key endpoints that runs the logic but does not pe
 5. **Store dry_run preference** in `Settings` table — allow users to default all applications to dry-run.
 
 ### Files to Modify
+
 - `backend/services/resume-tailor/server.py` (lines 652–679, 806–840)
 - `frontend/app/apply/page.tsx`
 - `frontend/app/suggestions/page.tsx`
 - `frontend/lib/api.ts`
 
 ### Expected Impact
+
 - Reduces wasted API spend on bad URLs or pages the scraper can't handle
 - Lets users confirm job detection is working before burning Gemini credits
 - Provides safety net for new source configurations
@@ -661,6 +745,7 @@ Add explicit startup health checks with named phases that surface failures immed
 ### Actionable Items
 
 1. **Create `backend/services/resume-tailor/core/startup.py`** with ordered phases:
+
    ```python
    async def run_startup_checks():
        phases = [
@@ -692,12 +777,14 @@ Add explicit startup health checks with named phases that surface failures immed
 5. **Fast-fail on critical missing config** — if `GOOGLE_API_KEY` is absent, log clearly and disable agent endpoints with a `503 Service Unavailable` with a descriptive body.
 
 ### Files to Modify
+
 - `backend/services/resume-tailor/server.py`
 - `backend/services/resume-tailor/core/` (new `startup.py`)
 - `frontend/app/layout.tsx`
 - `frontend/lib/api.ts` (add `getHealth()`)
 
 ### Expected Impact
+
 - Eliminates "why is everything broken?" debugging on fresh install
 - Surfaces `pdflatex` missing immediately instead of on first apply (the #2 reported setup issue)
 - Gives operators a `/health` endpoint for container health probes
@@ -723,10 +810,11 @@ Replace blind character-slice truncation with a content-aware summarization stra
 ### Actionable Items
 
 1. **Create `content_compactor.py`** in `core/`:
+
    ```python
    def estimate_tokens(text: str) -> int:
        return len(text) // 4 + 1
-   
+
    def compact_html_for_discovery(html: str, max_tokens: int = 8000) -> str:
        """Extract only text content + links from HTML, then truncate intelligently."""
        # 1. Strip all style/script tags
@@ -734,7 +822,7 @@ Replace blind character-slice truncation with a content-aware summarization stra
        # 3. Extract visible text blocks
        # 4. If still > max_tokens, keep first and last 40% (likely where listings are)
        ...
-   
+
    def compact_jd_for_tailoring(jd_text: str, max_tokens: int = 4000) -> str:
        """Keep requirements section + first/last paragraphs, drop boilerplate."""
        # 1. Detect and prioritize "Requirements", "Responsibilities" sections
@@ -752,11 +840,13 @@ Replace blind character-slice truncation with a content-aware summarization stra
 5. **Add `max_jd_tokens` to Settings** — user-configurable limit.
 
 ### Files to Modify
+
 - `backend/services/resume-tailor/core/agents.py` (line 28 truncation)
 - `backend/services/resume-tailor/core/` (new `content_compactor.py`)
 - `backend/services/resume-tailor/server.py`
 
 ### Expected Impact
+
 - Fixes partial scrape issues where the last 20% of job listings are cut off
 - Reduces prompt token usage by ~30–40% on verbose job descriptions (cost saving)
 - Improves tailoring quality by keeping the high-signal parts of the JD
@@ -784,15 +874,19 @@ Send timezone-aware dates from the backend and fix the frontend comparison.
 1. **Add timezone to `GET /jobs` response** — return `created_at` as ISO 8601 with timezone offset: `2025-04-02T19:31:00-04:00`
 
 2. **Fix `isToday()` in `dashboard/page.tsx`** — compare dates in UTC by normalizing both sides:
+
    ```typescript
    function isToday(dateStr: string): boolean {
      const date = new Date(dateStr);
      const now = new Date();
-     return date.getUTCFullYear() === now.getUTCFullYear() &&
-            date.getUTCMonth() === now.getUTCMonth() &&
-            date.getUTCDate() === now.getUTCDate();
+     return (
+       date.getUTCFullYear() === now.getUTCFullYear() &&
+       date.getUTCMonth() === now.getUTCMonth() &&
+       date.getUTCDate() === now.getUTCDate()
+     );
    }
    ```
+
    Or, send a `today_date` field from the server in `GET /jobs` response and compare against that.
 
 3. **Add `GET /settings/server-time`** endpoint — returns the server's current time as ISO 8601. Frontend uses this as the reference for "today" grouping.
@@ -800,11 +894,13 @@ Send timezone-aware dates from the backend and fix the frontend comparison.
 4. **Standardize all timestamp displays** — use `Intl.DateTimeFormat` with `timeZoneName: "short"` so the user knows what timezone is shown.
 
 ### Files to Modify
+
 - `frontend/app/dashboard/page.tsx` (lines 44–48)
 - `backend/services/resume-tailor/server.py` (timestamp serialization)
 - `frontend/lib/api.ts`
 
 ### Expected Impact
+
 - Fixes TODO #8 (timezone issue)
 - Small change, high correctness improvement — stops jobs appearing in the wrong day group
 
@@ -812,19 +908,19 @@ Send timezone-aware dates from the backend and fix the frontend comparison.
 
 ## Summary Table
 
-| # | Feature | Priority | Impact | Effort | Key Files |
-|---|---------|----------|--------|--------|-----------|
-| 1 | Real-time SSE Progress | 1 | High | Medium | `server.py`, `jobs/[id]/page.tsx` |
-| 2 | Pre/Post Agent Hooks | 2 | High | Medium | `agents.py`, new `hooks.py` |
-| 3 | Multi-Provider LLM | 3 | High | Medium | `llm_client.py`, `agents.py` |
-| 4 | Token Cost Tracking | 4 | Medium | Small | `llm_client.py`, `database.py` |
-| 5 | Site Scraper Plugins | 5 | High | Large | `job-scraper/main.py` |
-| 6 | Prompt Builder + User Instructions | 6 | Medium | Small | `agents.py`, new `prompt_builder.py` |
-| 7 | Audit Log per Application | 7 | Medium | Small | `database.py`, `server.py` |
-| 8 | Dry-Run Mode | 8 | Medium | Small | `server.py`, `apply/page.tsx` |
-| 9 | Startup Health Checks | 9 | Medium | Small | new `startup.py`, `server.py` |
-| 10 | Content-Aware Compaction | 10 | Low-Med | Small | `agents.py`, new `content_compactor.py` |
-| 11 | Timezone Fix | 11 | Low | Small | `dashboard/page.tsx` |
+| #   | Feature                            | Priority | Impact  | Effort | Key Files                               |
+| --- | ---------------------------------- | -------- | ------- | ------ | --------------------------------------- |
+| 1   | Real-time SSE Progress             | 1        | High    | Medium | `server.py`, `jobs/[id]/page.tsx`       |
+| 2   | Pre/Post Agent Hooks               | 2        | High    | Medium | `agents.py`, new `hooks.py`             |
+| 3   | Multi-Provider LLM                 | 3        | High    | Medium | `llm_client.py`, `agents.py`            |
+| 4   | Token Cost Tracking                | 4        | Medium  | Small  | `llm_client.py`, `database.py`          |
+| 5   | Site Scraper Plugins               | 5        | High    | Large  | `job-scraper/main.py`                   |
+| 6   | Prompt Builder + User Instructions | 6        | Medium  | Small  | `agents.py`, new `prompt_builder.py`    |
+| 7   | Audit Log per Application          | 7        | Medium  | Small  | `database.py`, `server.py`              |
+| 8   | Dry-Run Mode                       | 8        | Medium  | Small  | `server.py`, `apply/page.tsx`           |
+| 9   | Startup Health Checks              | 9        | Medium  | Small  | new `startup.py`, `server.py`           |
+| 10  | Content-Aware Compaction           | 10       | Low-Med | Small  | `agents.py`, new `content_compactor.py` |
+| 11  | Timezone Fix                       | 11       | Low     | Small  | `dashboard/page.tsx`                    |
 
 ---
 
@@ -848,4 +944,7 @@ Add dry-run for safe testing, then build the plugin system for new job sites.
 
 Not a feature but a required fix before building Features 1 or 8:
 
-The global `scan_status` dict in `server.py` (lines 79–92) is mutated by background tasks and read by the status polling endpoint without any locking. With concurrent scans or multiple simultaneous requests, this can produce corrupted scan status reads. Replace with a per-scan `asyncio.Queue` (the same mechanism as Feature 1's event bus) or an `asyncio.Lock`-protected dict.
+The global `scan_status` dict in `server.py` (lines 79–92) is mutated by parallel source tasks and read by the status endpoint without any locking or snapshot semantics. In a single-process deployment this can still produce inconsistent/interleaved status reads. Replace with either:
+
+- `asyncio.Lock`-protected updates + copy-on-read snapshot response, or
+- a per-scan state object keyed by scan id, backed by `asyncio.Queue` events.

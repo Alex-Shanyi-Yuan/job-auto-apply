@@ -13,7 +13,8 @@ from dotenv import load_dotenv
 # Add the project root to Python path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from core import scrape_and_parse, ResumeTailorAgent, compile_pdf
+from core.jd_scraper import scrape_and_parse
+from core import ResumeTailorAgent, compile_pdf
 
 
 def load_master_resume(file_path: str = "./data/master.tex") -> str:

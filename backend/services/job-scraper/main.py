@@ -1,9 +1,12 @@
+import logging
+from pathlib import Path
+
+from bs4 import BeautifulSoup
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from playwright.async_api import async_playwright
-from bs4 import BeautifulSoup
-import logging
-import re
+
+from plugins.plugin_registry import plugin_registry
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -23,51 +26,17 @@ class ScrapeResponse(BaseModel):
     url: str
 
 
-def clean_html_for_llm(soup: BeautifulSoup, base_url: str) -> str:
-    """
-    Clean HTML while preserving structure useful for LLM parsing.
-    Keeps: headings, paragraphs, links, lists, divs with job-like content.
-    Removes: scripts, styles, SVGs, images, comments, hidden elements.
-    """
-    # Remove unwanted elements
-    for element in soup(["script", "style", "svg", "img", "noscript", "iframe", "video", "audio"]):
-        element.decompose()
-    
-    # Remove comments
-    for comment in soup.find_all(string=lambda text: isinstance(text, str) and text.strip().startswith('<!--')):
-        comment.extract()
-    
-    # Remove hidden elements
-    for element in soup.find_all(attrs={"style": re.compile(r"display:\s*none", re.I)}):
-        element.decompose()
-    for element in soup.find_all(attrs={"hidden": True}):
-        element.decompose()
-    
-    # Clean up attributes - keep only href on links
-    for tag in soup.find_all(True):
-        if tag.name == 'a':
-            href = tag.get('href', '')
-            # Convert relative URLs to absolute
-            if href and not href.startswith(('http://', 'https://', 'mailto:', 'javascript:')):
-                if href.startswith('/'):
-                    # Extract base domain from URL
-                    from urllib.parse import urlparse
-                    parsed = urlparse(base_url)
-                    href = f"{parsed.scheme}://{parsed.netloc}{href}"
-            tag.attrs = {'href': href} if href else {}
-        else:
-            tag.attrs = {}
-    
-    # Get the body or the whole soup if no body
-    body = soup.find('body') or soup
-    
-    return str(body)
+@app.on_event("startup")
+async def load_plugins() -> None:
+    plugin_registry.load_from_directory(Path(__file__).parent / "plugins")
+    logger.info("Loaded scraper plugins")
 
 
 @app.post("/scrape", response_model=ScrapeResponse)
 async def scrape_job(request: ScrapeRequest):
     logger.info(f"Scraping URL: {request.url} (format: {request.format})")
     try:
+        plugin = plugin_registry.get_plugin_for_url(request.url)
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context(
@@ -96,18 +65,10 @@ async def scrape_job(request: ScrapeRequest):
             
             if request.format == "html":
                 # Return cleaned HTML with structure preserved
-                result_content = clean_html_for_llm(soup, request.url)
+                result_content = plugin.extract_html(soup, request.url)
             else:
                 # Default: Return clean text
-                for script in soup(["script", "style", "svg", "img"]):
-                    script.decompose()
-                    
-                text = soup.get_text(separator='\n')
-                
-                # Clean up text (remove extra whitespace)
-                lines = (line.strip() for line in text.splitlines())
-                chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-                result_content = '\n'.join(chunk for chunk in chunks if chunk)
+                result_content = plugin.extract_text(soup)
             
             return ScrapeResponse(
                 title=title,

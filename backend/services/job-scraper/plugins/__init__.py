@@ -1,0 +1,1 @@
+"""Scraper plugin package."""
