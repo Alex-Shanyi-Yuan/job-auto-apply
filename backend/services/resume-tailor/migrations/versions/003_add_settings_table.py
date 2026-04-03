@@ -29,16 +29,22 @@ def upgrade() -> None:
     )
     
     # Make filter_prompt nullable in jobsource table
-    op.alter_column('jobsource', 'filter_prompt',
-                    existing_type=sa.String(),
-                    nullable=True)
+    with op.batch_alter_table('jobsource') as batch_op:
+        batch_op.alter_column(
+            'filter_prompt',
+            existing_type=sa.String(),
+            nullable=True,
+        )
 
 
 def downgrade() -> None:
     # Make filter_prompt required again
-    op.alter_column('jobsource', 'filter_prompt',
-                    existing_type=sa.String(),
-                    nullable=False)
+    with op.batch_alter_table('jobsource') as batch_op:
+        batch_op.alter_column(
+            'filter_prompt',
+            existing_type=sa.String(),
+            nullable=False,
+        )
     
     # Drop settings table
     op.drop_table('settings')

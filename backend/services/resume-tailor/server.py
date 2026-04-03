@@ -9,13 +9,13 @@ import json
 import logging
 import asyncio
 from pathlib import Path
-from datetime import datetime
-from urllib.parse import urljoin, urlparse
 from sqlmodel import Session, select
 from contextlib import asynccontextmanager
 
-from database import create_db_and_tables, get_session, Job, JobSource, Settings, engine
+from database import create_db_and_tables, get_session, Job, JobSource, Settings, engine, utcnow
 from core import JobParsingAgent, ResumeTailorAgent, JobDiscoveryAgent, JobScoringAgent, compile_pdf
+from core.db_sync import reconcile_postgres_and_sqlite
+from core.site_plugins import resolve_job_url
 
 # Configure Logging
 logging.basicConfig(
@@ -24,39 +24,63 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# only google needs this right now
-def resolve_job_url(job_url: str, source_url: str) -> str:
-    """
-    Resolve a job URL that may be relative to an absolute URL.
-    
-    Args:
-        job_url: The job URL (may be relative like '/jobs/123' or 'jobs/123')
-        source_url: The source page URL to use as base for resolution
-    
-    Returns:
-        Absolute URL to the job posting
-    """
-    # If already absolute, return as-is
-    if job_url.startswith('http://') or job_url.startswith('https://'):
-        return job_url
-    
-    # Parse the source URL to get the base
-    parsed = urlparse(source_url)
-    base_url = f"{parsed.scheme}://{parsed.netloc}"
-    
-    # If job_url starts with '/', it's root-relative
-    if job_url.startswith('/'):
-        return base_url + job_url
-    
-    # Otherwise, use urljoin with the base URL (not the full path)
-    # This handles relative paths like 'jobs/results/123'
-    return urljoin(base_url + '/', job_url)
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+DB_SYNC_ENABLED = _env_bool("DB_SYNC_ENABLED", True)
+SYNC_ON_BOOT = _env_bool("SYNC_ON_BOOT", True)
+SYNC_ON_SHUTDOWN = _env_bool("SYNC_ON_SHUTDOWN", True)
+
+
+async def _run_db_reconcile(phase: str):
+    if not DB_SYNC_ENABLED:
+        logger.info("DB sync skipped during %s because DB_SYNC_ENABLED is false", phase)
+        return
+
+    try:
+        max_attempts = int(os.getenv("DB_SYNC_STARTUP_RETRIES", "6")) if phase == "startup" else 1
+        retry_delay = float(os.getenv("DB_SYNC_RETRY_DELAY_SECONDS", "2"))
+
+        result = None
+        for attempt in range(1, max_attempts + 1):
+            result = await asyncio.to_thread(reconcile_postgres_and_sqlite)
+            if result.get("status") == "synced":
+                break
+
+            if phase == "startup" and result.get("reason") == "postgres_unreachable" and attempt < max_attempts:
+                logger.info(
+                    "DB sync startup retry %s/%s after Postgres unreachable",
+                    attempt,
+                    max_attempts,
+                )
+                await asyncio.sleep(retry_delay)
+
+        if result.get("status") == "synced":
+            logger.info(
+                "DB sync completed during %s. Winner=%s",
+                phase,
+                result.get("winner"),
+            )
+        else:
+            logger.info("DB sync skipped during %s: %s", phase, result)
+    except Exception:
+        logger.exception("DB sync failed during %s", phase)
+
 
 # Initialize FastAPI
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     create_db_and_tables()
+    if SYNC_ON_BOOT:
+        await _run_db_reconcile("startup")
     yield
+    if SYNC_ON_SHUTDOWN:
+        await _run_db_reconcile("shutdown")
 
 app = FastAPI(lifespan=lifespan)
 
@@ -108,6 +132,7 @@ class JobResponse(BaseModel):
     requirements: Optional[List[str]] = None
     error_message: Optional[str] = None
     created_at: str
+    updated_at: str
 
 
 class JobSourceCreate(BaseModel):
@@ -129,6 +154,7 @@ class JobSourceResponse(BaseModel):
     filter_prompt: Optional[str] = None
     last_scraped_at: Optional[str] = None
     created_at: str
+    updated_at: str
 
 
 class RefreshRequest(BaseModel):
@@ -201,7 +227,7 @@ def set_global_filter(value: str) -> None:
         setting = session.get(Settings, GLOBAL_FILTER_KEY)
         if setting:
             setting.value = value
-            setting.updated_at = datetime.utcnow()
+            setting.updated_at = utcnow()
         else:
             setting = Settings(key=GLOBAL_FILTER_KEY, value=value)
         session.add(setting)
@@ -236,7 +262,8 @@ def job_to_response(job: Job) -> JobResponse:
         score=job.score,
         requirements=json.loads(job.requirements) if job.requirements else None,
         error_message=job.error_message,
-        created_at=job.created_at.isoformat()
+        created_at=job.created_at.isoformat(),
+        updated_at=job.updated_at.isoformat(),
     )
 
 
@@ -247,7 +274,8 @@ def source_to_response(source: JobSource) -> JobSourceResponse:
         name=source.name,
         filter_prompt=source.filter_prompt,
         last_scraped_at=source.last_scraped_at.isoformat() if source.last_scraped_at else None,
-        created_at=source.created_at.isoformat()
+        created_at=source.created_at.isoformat(),
+        updated_at=source.updated_at.isoformat(),
     )
 
 # === Background Tasks ===
@@ -514,7 +542,7 @@ async def process_single_source(
             with Session(engine) as session:
                 source = session.exec(select(JobSource).where(JobSource.id == source_id)).first()
                 if source:
-                    source.last_scraped_at = datetime.utcnow()
+                    source.last_scraped_at = utcnow()
                     session.add(source)
                     session.commit()
             

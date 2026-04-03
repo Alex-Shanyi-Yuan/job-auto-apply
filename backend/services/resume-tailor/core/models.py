@@ -1,5 +1,23 @@
-from pydantic import BaseModel, Field
 from typing import List, Optional
+
+try:
+    from pydantic import BaseModel, Field
+except ImportError:  # pragma: no cover - lightweight fallback for offline tests
+    class BaseModel:
+        def __init__(self, **data):
+            for key, value in data.items():
+                setattr(self, key, value)
+
+        @classmethod
+        def model_validate(cls, data):
+            if isinstance(data, dict):
+                return cls(**data)
+            if hasattr(data, "__dict__"):
+                return cls(**data.__dict__)
+            raise TypeError(f"Cannot validate data of type {type(data)!r}")
+
+    def Field(default=None, **kwargs):
+        return default
 
 
 class JobPosting(BaseModel):

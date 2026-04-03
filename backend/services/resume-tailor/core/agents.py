@@ -1,14 +1,14 @@
 from typing import Optional, List
 import time
-from .llm_client import GeminiClient
+from .llm_providers import LLMProvider, create_default_provider
 from .models import JobPosting, DiscoveryResult, DiscoveredJob, JobScore
 
 
 class JobDiscoveryAgent:
     """Agent responsible for discovering jobs from search result pages."""
     
-    def __init__(self, client: Optional[GeminiClient] = None):
-        self.client = client or GeminiClient()
+    def __init__(self, client: Optional[LLMProvider] = None):
+        self.client = client or create_default_provider()
     
     def discover(self, html_content: str, filter_prompt: str) -> List[DiscoveredJob]:
         """
@@ -49,7 +49,7 @@ Return the matching jobs as a structured JSON object."""
         try:
             result = self.client.generate_structured(
                 prompt=prompt,
-                response_schema=DiscoveryResult,
+                schema=DiscoveryResult,
                 temperature=0.1
             )
             return result.jobs
@@ -61,8 +61,8 @@ Return the matching jobs as a structured JSON object."""
 class JobScoringAgent:
     """Agent responsible for scoring job matches based on resume fit."""
     
-    def __init__(self, client: Optional[GeminiClient] = None):
-        self.client = client or GeminiClient()
+    def __init__(self, client: Optional[LLMProvider] = None):
+        self.client = client or create_default_provider()
     
     def score(self, job_description: str, master_resume: str) -> JobScore:
         """
@@ -106,7 +106,7 @@ Provide a score and brief reasoning (2-3 sentences)."""
         try:
             result = self.client.generate_structured(
                 prompt=prompt,
-                response_schema=JobScore,
+                schema=JobScore,
                 temperature=0.2
             )
             return result
@@ -118,8 +118,8 @@ Provide a score and brief reasoning (2-3 sentences)."""
 class JobParsingAgent:
     """Agent responsible for parsing raw job descriptions into structured data."""
     
-    def __init__(self, client: Optional[GeminiClient] = None):
-        self.client = client or GeminiClient()
+    def __init__(self, client: Optional[LLMProvider] = None):
+        self.client = client or create_default_provider()
         
     def parse(self, raw_text: str) -> JobPosting:
         """
@@ -142,7 +142,7 @@ class JobParsingAgent:
         
         job_posting = self.client.generate_structured(
             prompt=prompt,
-            response_schema=JobPosting
+            schema=JobPosting
         )
         
         # Attach the raw text to the object for reference
@@ -153,8 +153,8 @@ class JobParsingAgent:
 class ResumeTailorAgent:
     """Agent responsible for tailoring resumes to specific job postings."""
     
-    def __init__(self, client: Optional[GeminiClient] = None):
-        self.client = client or GeminiClient()
+    def __init__(self, client: Optional[LLMProvider] = None):
+        self.client = client or create_default_provider()
         
     def tailor(self, master_resume: str, job_posting: JobPosting, max_retries: int = 3) -> str:
         """
@@ -197,7 +197,7 @@ Return the complete tailored LaTeX resume below:"""
             try:
                 # We use max_retries=1 for the client call to avoid compounding retries
                 # If the API fails, we catch it here and retry the whole process
-                response = self.client.generate_content(prompt=prompt, max_retries=1)
+                response = self.client.generate_text(prompt=prompt, temperature=0.7)
                 
                 if not self._validate_latex(response):
                     raise ValueError("Generated content is not valid LaTeX")

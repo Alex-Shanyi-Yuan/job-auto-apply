@@ -23,9 +23,15 @@ cp .env.example .env
 ```
 
 Edit `.env` and add your API key:
+
 ```
 GOOGLE_API_KEY=AIzaSyC...your_actual_key_here
-DATABASE_URL=postgresql://postgres:postgres@postgres:5432/autocareer
+DATABASE_BACKEND=hybrid
+SQLITE_DATABASE_URL=sqlite:///./data/autocareer.db
+POSTGRES_DATABASE_URL=postgresql://user:password@postgres:5432/autocareer
+DB_SYNC_ENABLED=true
+SYNC_ON_BOOT=true
+SYNC_ON_SHUTDOWN=true
 SCRAPER_SERVICE_URL=http://scraper:8001
 ```
 
@@ -36,6 +42,7 @@ Edit `data/master.tex` with your actual resume content. The provided template is
 ### 4. Start All Services
 
 From the project root:
+
 ```bash
 cd /path/to/job-auto-apply
 docker-compose up --build
@@ -55,7 +62,7 @@ Navigate to: **http://localhost:3000**
 2. Find the **Global Filter** card (purple)
 3. Click **Edit** and enter your job preferences:
    ```
-   Software Engineer roles, 3-5 years experience, 
+   Software Engineer roles, 3-5 years experience,
    Python or JavaScript, remote-friendly
    ```
 4. Click **Save**
@@ -70,6 +77,7 @@ Navigate to: **http://localhost:3000**
 3. Click **Add Source**
 
 Example URLs:
+
 - LinkedIn: `https://www.linkedin.com/jobs/search/?keywords=python%20developer`
 - Indeed: `https://www.indeed.com/jobs?q=software+engineer`
 
@@ -84,6 +92,7 @@ Example URLs:
 ### Step 4: Review & Apply
 
 For each suggested job:
+
 - **Score** (0-100): Higher = better match
 - **Apply**: Generate tailored resume
 - **Dismiss**: Remove from suggestions
@@ -91,6 +100,7 @@ For each suggested job:
 ### Step 5: Track Applications
 
 Go to **Dashboard** to:
+
 - See all applied jobs
 - Check status (Processing → Applied)
 - Download tailored PDFs
@@ -98,19 +108,23 @@ Go to **Dashboard** to:
 ## Common Issues
 
 **"Connection refused"**
+
 - Make sure `docker-compose up` is running
 - Wait for all services to start (check logs)
 
 **"GOOGLE_API_KEY not found"**
+
 - Make sure you edited `.env` (not `.env.example`)
 - Restart services: `docker-compose restart tailor`
 
 **"No jobs found"**
+
 - Check if the source URL returns search results in a browser
 - Some sites block automated requests
 - Try a different job board
 
 **PDF download fails**
+
 - Check the job status on Dashboard
 - Look for error messages
 - Check tailor service logs: `docker-compose logs tailor`
