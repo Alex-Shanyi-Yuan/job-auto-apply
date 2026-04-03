@@ -179,7 +179,7 @@ All services including the frontend are orchestrated by Docker Compose:
 # Clone and start all services
 git clone https://github.com/Alex-Shanyi-Yuan/job-auto-apply.git
 cd job-auto-apply
-docker-compose up --build
+docker compose --profile postgres up --build
 
 # Open the web UI
 open http://localhost:3000
@@ -205,8 +205,10 @@ See [PROJECT_README.md](PROJECT_README.md) for detailed setup instructions.
 ### Running the Stack
 
 ```bash
-docker-compose up --build
+docker compose --profile postgres up --build
 ```
+
+Note: PostgreSQL is profile-gated in Compose, so include `--profile postgres` to start the database service.
 
 ### Access Points
 

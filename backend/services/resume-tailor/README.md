@@ -20,11 +20,13 @@ The recommended way to run this service is as part of the full AutoCareer stack:
 ```bash
 # From the project root
 cd /path/to/job-auto-apply
-docker-compose up --build
+docker compose --profile postgres up --build
 
 # Access the web UI
 open http://localhost:3000
 ```
+
+Note: PostgreSQL uses a Compose profile in this repo, so include `--profile postgres` when starting the stack.
 
 ### Environment Setup
 

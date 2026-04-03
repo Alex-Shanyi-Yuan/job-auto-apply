@@ -138,10 +138,22 @@ def _load_store(engine_obj, payload: Dict[str, List[Dict[str, Any]]]) -> None:
         for row in payload["settings"]:
             session.add(Settings(**row))
 
+        valid_source_ids = set()
+
         for row in payload["jobsource"]:
             session.add(JobSource(**row))
+            if row.get("id") is not None:
+                valid_source_ids.add(row["id"])
+
+        # Persist source rows first so SQLite FK checks pass when inserting jobs.
+        session.commit()
 
         for row in payload["job"]:
+            # Older Postgres datasets may contain orphaned source_id values.
+            # SQLite enforces FK constraints, so normalize invalid references.
+            source_id = row.get("source_id")
+            if source_id is not None and source_id not in valid_source_ids:
+                row = {**row, "source_id": None}
             session.add(Job(**row))
 
         session.commit()
