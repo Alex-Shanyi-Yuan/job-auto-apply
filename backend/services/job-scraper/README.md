@@ -1,33 +1,16 @@
 # Job Scraper Service
 
-A specialized microservice for fetching and extracting text content from job posting URLs using Playwright and BeautifulSoup.
+Headless browser service for fetching job pages using Playwright.
 
-## Features
+📚 **Full documentation**: See [docs/](../../../docs/)
 
-- 🕷️ **Headless Browsing**: Uses Playwright (Chromium) to render dynamic JavaScript-heavy websites.
-- 🧹 **Clean Extraction**: Uses BeautifulSoup to strip HTML tags and scripts, returning clean text.
-- 🚀 **FastAPI**: Exposes a simple REST API for easy integration.
-- 🐳 **Dockerized**: Pre-configured with all browser dependencies.
+## Quick Development Setup
 
-## API Endpoints
-
-### `POST /scrape`
-
-Scrapes a given URL and returns the title and content.
-
-**Request:**
-```json
-{
-  "url": "https://www.linkedin.com/jobs/view/...",
-  "format": "text"  // or "html" for cleaned HTML with links preserved
-}
+```bash
+cd backend/services/job-scraper
+pip install -r requirements.txt
+uvicorn main:app --reload --port 8001
 ```
-
-**Response:**
-```json
-{
-  "title": "Software Engineer - Company Name",
-  "text": "Job Description text content...",
   "url": "https://www.linkedin.com/jobs/view/..."
 }
 ```

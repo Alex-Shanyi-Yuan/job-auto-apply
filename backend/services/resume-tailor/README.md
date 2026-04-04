@@ -2,35 +2,15 @@
 
 The core backend service for AutoCareer - handles AI job discovery, scoring, and resume tailoring.
 
-## Features
+📚 **Full documentation**: See [docs/](../../../docs/)
 
-- 🔍 **AI Job Discovery**: Automatically find jobs from configured sources using Gemini Pro
-- 📊 **Smart Scoring**: AI-powered relevance scoring (0-100) based on your resume
-- 🤖 **AI-Powered Tailoring**: Intelligently adapt your resume for each job
-- 📄 **LaTeX Support**: Works with your existing LaTeX resume templates
-- 🐳 **Dockerized**: All dependencies (Python + TeX Live) in one container
-- 🌐 **REST API**: Full API for frontend integration
-- ⚡ **Parallel Processing**: Scan multiple sources and jobs concurrently
-- 📝 **Detailed Reports**: Per-source scan results with skip reasons
-
-## Quick Start (Web Mode)
-
-The recommended way to run this service is as part of the full AutoCareer stack:
+## Quick Development Setup
 
 ```bash
-# From the project root
-cd /path/to/job-auto-apply
-docker compose --profile postgres up --build
-
-# Access the web UI
-open http://localhost:3000
+cd backend/services/resume-tailor
+pip install -r requirements.txt
+uvicorn server:app --reload --port 8000
 ```
-
-Note: PostgreSQL uses a Compose profile in this repo, so include `--profile postgres` when starting the stack.
-
-### Environment Setup
-
-Create a `.env` file:
 
 ```bash
 GOOGLE_API_KEY=your_gemini_api_key_here

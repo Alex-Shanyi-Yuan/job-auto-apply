@@ -2,32 +2,17 @@
 
 The web interface for AutoCareer - built with Next.js 14, TypeScript, and shadcn/ui.
 
-## Features
+📚 **Full documentation**: See [docs/](../docs/)
 
-- 📊 **Dashboard** - Track all job applications with status badges
-- 🔍 **Suggestions** - AI-discovered jobs with scoring and source management
-- 📝 **Apply** - Manual URL submission for resume tailoring
-- 📄 **Job Details** - View requirements and download tailored PDFs
-
-## Tech Stack
-
-- **Framework**: Next.js 14 (App Router)
-- **Language**: TypeScript
-- **Styling**: Tailwind CSS
-- **Components**: shadcn/ui
-- **State**: React hooks with polling
-
-## Getting Started
-
-### Prerequisites
-
-- Node.js 18+
-- Backend services running (see [main README](../README.md))
-
-### Development
+## Quick Development Setup
 
 ```bash
-# Install dependencies
+cd frontend
+npm install
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000) in your browser.
 npm install
 
 # Start development server
