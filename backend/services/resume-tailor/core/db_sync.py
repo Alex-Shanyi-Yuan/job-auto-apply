@@ -15,8 +15,57 @@ from database import (
     create_engine_for_url,
     get_postgres_engine,
     get_sqlite_engine,
+    DATABASE_BACKEND,
+    SQLITE_DATABASE_URL,
+    POSTGRES_DATABASE_URL,
 )
 
+# Alembic imports for schema version checking
+from alembic import command
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+from alembic.runtime.migration import MigrationContext
+
+import logging
+logger = logging.getLogger(__name__)
+
+
+def get_alembic_version(engine):
+    """Get current Alembic migration version from database."""
+    try:
+        with engine.connect() as conn:
+            context = MigrationContext.configure(conn)
+            return context.get_current_revision()
+    except Exception as e:
+        logger.error(f"Failed to get Alembic version: {e}")
+        return None
+
+
+def check_schema_parity():
+    """Check if SQLite and PostgreSQL have the same schema version."""
+    if DATABASE_BACKEND != "hybrid":
+        return True
+    
+    try:
+        sqlite_engine = create_engine_for_url(SQLITE_DATABASE_URL)
+        postgres_engine = create_engine_for_url(POSTGRES_DATABASE_URL)
+        
+        sqlite_version = get_alembic_version(sqlite_engine)
+        postgres_version = get_alembic_version(postgres_engine)
+        
+        if sqlite_version != postgres_version:
+            logger.warning(
+                f"Schema version mismatch: SQLite={sqlite_version}, PostgreSQL={postgres_version}. "
+                "Sync disabled until schemas match. Run 'alembic upgrade head' in both environments."
+            )
+            return False
+        
+        logger.info(f"Schema parity confirmed: both databases at version {sqlite_version}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to check schema parity: {e}")
+        return False
 
 @dataclass
 class StoreStats:
@@ -166,7 +215,16 @@ def copy_store(source_engine, target_engine) -> None:
     _load_store(target_engine, payload)
 
 
-def reconcile_postgres_and_sqlite() -> Dict[str, Any]:
+def sync_databases():
+    """Sync data between SQLite and PostgreSQL in hybrid mode."""
+    if DATABASE_BACKEND != "hybrid":
+        return {"status": "skipped", "reason": "not in hybrid mode"}
+    
+    # Check schema parity first
+    if not check_schema_parity():
+        return {"status": "disabled", "reason": "schema version mismatch"}
+    
+    # ... rest of existing sync logic
     sqlite_engine = get_sqlite_engine()
     postgres_engine = get_postgres_engine()
 
@@ -205,6 +263,9 @@ def reconcile_postgres_and_sqlite() -> Dict[str, Any]:
             "postgres": final_postgres_stats.__dict__,
         },
     }
+
+# For backward compatibility, keep the old function name
+reconcile_postgres_and_sqlite = sync_databases
 
 
 def migrate_postgres_to_sqlite(postgres_url: str, sqlite_url: str) -> Dict[str, Any]:
