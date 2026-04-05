@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
@@ -1438,4 +1438,5 @@ def get_scan_status():
 def get_health_status():
     """Get startup health check results."""
     startup_health = getattr(app.state, "startup_health", startup_health_runner.skipped_report().to_dict())
-    return startup_health
+    status_code = 503 if startup_health.get("status") == "failed" else 200
+    return JSONResponse(content=startup_health, status_code=status_code)
