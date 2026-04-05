@@ -249,6 +249,24 @@ class JobWithStagesResponse(BaseModel):
     created_at: str
 
 
+class JobDetailResponse(BaseModel):
+    """Extended job response with stages for GET /jobs/{id}"""
+    id: int
+    url: str
+    company: str
+    title: str
+    status: str
+    score: Optional[int] = None
+    requirements: Optional[list] = None
+    error_message: Optional[str] = None
+    pdf_path: Optional[str] = None
+    stages: list[JobStageResponse]
+    rejection_stage: Optional[str] = None
+    rejection_reason: Optional[str] = None
+    created_at: str
+    updated_at: str  # Include this field
+
+
 # === Helper Functions ===
 
 GLOBAL_FILTER_KEY = "global_filter_prompt"
@@ -758,11 +776,11 @@ def list_jobs():
         return [job_to_response(job) for job in jobs]
 
 
-@app.get("/jobs/{job_id}")
+@app.get("/jobs/{job_id}", response_model=JobDetailResponse)
 def get_job(job_id: int):
     """Get details for a specific job, including stages."""
     with Session(engine) as session:
-        job = session.exec(select(Job).where(Job.id == job_id)).first()
+        job = session.get(Job, job_id)
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
         # Get all completed stages for this job
@@ -770,7 +788,7 @@ def get_job(job_id: int):
             select(JobStage).where(
                 JobStage.job_id == job_id,
                 JobStage.completed_at.isnot(None)
-            )
+            ).order_by(JobStage.completed_at)  # ADD THIS
         ).all()
         return {
             "id": job.id,
@@ -793,6 +811,7 @@ def get_job(job_id: int):
             "rejection_stage": job.rejection_stage,
             "rejection_reason": job.rejection_reason,
             "created_at": job.created_at.isoformat(),
+            "updated_at": job.updated_at.isoformat(),  # ADD THIS
         }
 
 
