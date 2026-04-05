@@ -131,6 +131,12 @@ alembic upgrade head
 | `SYNC_ON_SHUTDOWN`      | Reconcile at graceful shutdown when Postgres is reachable | `true`                                                |
 | `SCRAPER_SERVICE_URL`   | Scraper service URL                                       | `http://scraper:8001`                                 |
 | `MASTER_RESUME_PATH`    | Path to LaTeX template                                    | `./data/master.tex`                                   |
+| `MAX_RETRIES`           | Retry attempts for tailoring/hook failures                | `3`                                                   |
+| `STREAM_QUEUE_WAIT_TIMEOUT_SECONDS` | Max wait for active job stream queue         | `1.0`                                                 |
+| `STREAM_QUEUE_WAIT_INTERVAL_SECONDS` | Poll interval while waiting for stream queue   | `0.05`                                                |
+| `STARTUP_FAIL_FAST`     | Stop service startup when critical checks fail            | `true`                                                |
+| `STARTUP_BLOCK_APPLY_ON_CRITICAL` | Return 503 from `/apply` if critical checks failed | `true`                                           |
+| `STARTUP_SCRAPER_TIMEOUT_SECONDS` | Timeout for scraper reachability check         | `5`                                                   |
 
 ### One-time PostgreSQL -> SQLite migration
 
