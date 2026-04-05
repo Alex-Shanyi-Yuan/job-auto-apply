@@ -494,9 +494,7 @@ def test_job_stream_endpoint_returns_sse_events(session: Session, client: TestCl
     async def create_job_queue(_: int):
         return queue
 
-    cleanup_mock = AsyncMock()
     monkeypatch.setattr(server.event_bus, "create_job_queue", create_job_queue)
-    monkeypatch.setattr(server.event_bus, "cleanup_job_queue", cleanup_mock)
 
     with client.stream("GET", f"/jobs/{job.id}/stream") as response:
         assert response.status_code == 200
@@ -506,7 +504,72 @@ def test_job_stream_endpoint_returns_sse_events(session: Session, client: TestCl
     assert "event: step_started" in body
     assert "event: pipeline_completed" in body
     assert "\"step\": \"scraping\"" in body
-    cleanup_mock.assert_awaited_once_with(job.id)
+
+
+def test_job_stream_endpoint_returns_404_when_job_missing(client: TestClient):
+    """Test GET /jobs/{job_id}/stream returns 404 for unknown jobs."""
+    response = client.get("/jobs/99999/stream")
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Job not found"}
+
+
+@pytest.mark.asyncio
+async def test_process_application_creates_queue_before_first_emit(session: Session, monkeypatch):
+    """process_application should create per-job queue before the first emitted event."""
+    job = Job(url="http://emit-order.com", company="Unknown", title="Unknown", status="processing", retry_count=0)
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+
+    call_order: list[tuple[str, EventType | None]] = []
+
+    async def create_job_queue(job_id: int):
+        call_order.append(("create", None))
+        return asyncio.Queue()
+
+    async def capture_emit(event: JobEvent):
+        call_order.append(("emit", event.type))
+
+    class FakeScrapeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"text": "job description text"}
+
+    class FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return FakeScrapeResponse()
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(
+        server,
+        "JobParsingAgent",
+        lambda: SimpleNamespace(
+            parse=lambda _: SimpleNamespace(
+                company_name="Acme",
+                job_title="Software Engineer",
+                key_requirements=["Python", "FastAPI"],
+            )
+        ),
+    )
+    monkeypatch.setattr(server, "load_master_resume", lambda _: "master")
+    monkeypatch.setattr(server, "ResumeTailorAgent", lambda: SimpleNamespace(tailor=lambda *_: "tailored"))
+    monkeypatch.setattr(server, "compile_pdf", lambda **_: "./output/acme.pdf")
+    monkeypatch.setattr(server.event_bus, "create_job_queue", create_job_queue)
+    monkeypatch.setattr(server.event_bus, "emit", capture_emit)
+    monkeypatch.setattr(server.event_bus, "cleanup_job_queue", AsyncMock())
+
+    await server.process_application(job.id, job.url)
+
+    assert call_order[0] == ("create", None)
+    assert call_order[1] == ("emit", EventType.PIPELINE_STARTED)
 
 
 @pytest.mark.asyncio
@@ -555,6 +618,9 @@ async def test_process_application_emits_pipeline_events_on_success(session: Ses
     monkeypatch.setattr(server, "ResumeTailorAgent", lambda: SimpleNamespace(tailor=lambda *_: "tailored"))
     monkeypatch.setattr(server, "compile_pdf", lambda **_: "./output/acme.pdf")
     monkeypatch.setattr(server.event_bus, "emit", capture_emit)
+    monkeypatch.setattr(server.event_bus, "create_job_queue", AsyncMock(return_value=asyncio.Queue()))
+    cleanup_mock = AsyncMock()
+    monkeypatch.setattr(server.event_bus, "cleanup_job_queue", cleanup_mock)
 
     await server.process_application(job.id, job.url)
 
@@ -563,6 +629,7 @@ async def test_process_application_emits_pipeline_events_on_success(session: Ses
     assert event_types[-1] == EventType.PIPELINE_COMPLETED
     assert event_types.count(EventType.STEP_STARTED) == 4
     assert event_types.count(EventType.STEP_COMPLETED) == 4
+    cleanup_mock.assert_awaited_once_with(job.id)
 
 
 @pytest.mark.asyncio
@@ -602,9 +669,13 @@ async def test_process_application_emits_pipeline_failed_on_exception(session: S
         lambda: SimpleNamespace(parse=lambda _: (_ for _ in ()).throw(ValueError("parse failed"))),
     )
     monkeypatch.setattr(server.event_bus, "emit", capture_emit)
+    monkeypatch.setattr(server.event_bus, "create_job_queue", AsyncMock(return_value=asyncio.Queue()))
+    cleanup_mock = AsyncMock()
+    monkeypatch.setattr(server.event_bus, "cleanup_job_queue", cleanup_mock)
 
     await server.process_application(job.id, job.url)
 
     session.refresh(job)
     assert job.status == "failed"
     assert any(event.type == EventType.PIPELINE_FAILED for event in emitted)
+    cleanup_mock.assert_awaited_once_with(job.id)

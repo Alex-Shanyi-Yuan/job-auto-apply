@@ -378,6 +378,7 @@ async def process_application(job_id: int, url: str):
             logger.error(f"Job {job_id} not found in database")
             return
 
+        await event_bus.create_job_queue(job_id)
         current_step: Optional[str] = None
         try:
             await event_bus.emit(
@@ -542,6 +543,8 @@ async def process_application(job_id: int, url: str):
             job.error_message = str(e)
             session.add(job)
             session.commit()
+        finally:
+            await event_bus.cleanup_job_queue(job_id)
 
 
 @app.get("/jobs/{job_id}/stream")
@@ -556,22 +559,19 @@ async def stream_job_events(job_id: int):
     terminal_events = {EventType.PIPELINE_COMPLETED, EventType.PIPELINE_FAILED}
 
     async def event_generator():
-        try:
-            while True:
-                try:
-                    event = await asyncio.wait_for(queue.get(), timeout=15.0)
-                    yield f"event: {event.type.value}\ndata: {json.dumps(event.to_dict())}\n\n"
-                    if event.type in terminal_events:
-                        break
-                except asyncio.TimeoutError:
-                    keepalive = {
-                        "type": "keepalive",
-                        "timestamp": utcnow().isoformat(),
-                        "job_id": job_id,
-                    }
-                    yield f"event: keepalive\ndata: {json.dumps(keepalive)}\n\n"
-        finally:
-            await event_bus.cleanup_job_queue(job_id)
+        while True:
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                yield f"event: {event.type.value}\ndata: {json.dumps(event.to_dict())}\n\n"
+                if event.type in terminal_events:
+                    break
+            except asyncio.TimeoutError:
+                keepalive = {
+                    "type": "keepalive",
+                    "timestamp": utcnow().isoformat(),
+                    "job_id": job_id,
+                }
+                yield f"event: keepalive\ndata: {json.dumps(keepalive)}\n\n"
 
     return StreamingResponse(
         event_generator(),
