@@ -41,6 +41,7 @@ Get your Gemini API key from: https://makersuite.google.com/app/apikey
 | `/suggestions`         | GET        | List AI-discovered jobs  |
 | `/suggestions/refresh` | POST       | Trigger new job scan     |
 | `/suggestions/status`  | GET        | Get scan progress        |
+| `/health`              | GET        | Startup health check report |
 
 ### Resume Tailoring
 
@@ -60,6 +61,11 @@ Get your Gemini API key from: https://makersuite.google.com/app/apikey
 | `/settings/global-filter` | GET/PUT | Global filter prompt |
 
 See [spec.md](spec.md) for complete API documentation.
+
+### Startup health checks
+
+On service startup, checks run in this order: database connectivity, migrations baseline, master resume presence, Gemini API key, scraper reachability, and pdflatex availability.  
+`STARTUP_FAIL_FAST` controls whether critical failures stop startup; `STARTUP_BLOCK_APPLY_ON_CRITICAL` controls whether `POST /apply` is blocked (503) when critical checks fail.
 
 ## AI Agents
 

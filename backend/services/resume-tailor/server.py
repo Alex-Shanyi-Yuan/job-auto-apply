@@ -18,6 +18,7 @@ from core import JobParsingAgent, ResumeTailorAgent, JobDiscoveryAgent, JobScori
 from core.db_sync import reconcile_postgres_and_sqlite
 from core.site_plugins import resolve_job_url
 from core.event_bus import event_bus, EventType, JobEvent
+from core.startup import build_startup_health_runner
 from core.hooks import (
     AgentHookRunner,
     LogAgentOutputHook,
@@ -44,6 +45,7 @@ def _env_bool(name: str, default: bool) -> bool:
 DB_SYNC_ENABLED = _env_bool("DB_SYNC_ENABLED", True)
 SYNC_ON_BOOT = _env_bool("SYNC_ON_BOOT", True)
 SYNC_ON_SHUTDOWN = _env_bool("SYNC_ON_SHUTDOWN", True)
+startup_health_runner = build_startup_health_runner()
 
 
 async def _run_db_reconcile(phase: str):
@@ -84,10 +86,15 @@ async def _run_db_reconcile(phase: str):
 # Initialize FastAPI
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    app.state.startup_health = startup_health_runner.skipped_report().to_dict()
     if os.getenv("TESTING") != "true":  # Skip in test mode
         create_db_and_tables()
         if SYNC_ON_BOOT:
             await _run_db_reconcile("startup")
+        startup_health_report = await asyncio.to_thread(startup_health_runner.run)
+        app.state.startup_health = startup_health_report.to_dict()
+        if startup_health_runner.fail_fast and startup_health_report.critical_failures:
+            raise RuntimeError(startup_health_report.apply_block_reason or "Startup health checks failed")
     yield
     if SYNC_ON_SHUTDOWN and os.getenv("TESTING") != "true":
         await _run_db_reconcile("shutdown")
@@ -1031,6 +1038,13 @@ async def process_job_discovery(source_ids: Optional[List[int]] = None):
 @app.post("/apply", response_model=JobResponse)
 async def apply_job(request: ApplyRequest, background_tasks: BackgroundTasks):
     """Start the application process for a job URL."""
+    startup_health = getattr(app.state, "startup_health", {})
+    if startup_health.get("apply_blocked"):
+        raise HTTPException(
+            status_code=503,
+            detail=f"Startup health check enforcement active: {startup_health.get('apply_block_reason', 'critical checks failed')}",
+        )
+
     with Session(engine) as session:
         # Check if job already exists (e.g., from suggestions)
         existing_job = session.exec(
@@ -1418,3 +1432,10 @@ def update_job_stages(job_id: int, request: UpdateJobStagesRequest):
 def get_scan_status():
     """Get the current status of the job discovery scan."""
     return ScanStatusResponse(**scan_status)
+
+
+@app.get("/health")
+def get_health_status():
+    """Get startup health check results."""
+    startup_health = getattr(app.state, "startup_health", startup_health_runner.skipped_report().to_dict())
+    return startup_health
