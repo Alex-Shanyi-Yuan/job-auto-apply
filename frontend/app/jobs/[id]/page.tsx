@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { getJob, getResumePdfUrl, Job } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { ExternalLink, Calendar, Building2, Loader2, FileText } from 'lucide-react';
+import { useJobStream } from '@/lib/useJobStream';
 
 export default function JobDetailsPage() {
   const params = useParams();
@@ -15,23 +16,42 @@ export default function JobDetailsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    async function fetchJob() {
-      try {
-        const data = await getJob(id);
-        setJob(data);
-      } catch (err) {
-        setError('Failed to load job details');
-        console.error(err);
-      } finally {
-        setLoading(false);
-      }
+  const fetchJob = useCallback(async () => {
+    try {
+      const data = await getJob(id);
+      setJob(data);
+    } catch (err) {
+      setError('Failed to load job details');
+      console.error(err);
+    } finally {
+      setLoading(false);
     }
+  }, [id]);
 
+  useEffect(() => {
     if (id) {
       fetchJob();
     }
-  }, [id]);
+  }, [id, fetchJob]);
+
+  const { stepStates, error: streamError, connected, stepOrder } = useJobStream(
+    id,
+    job?.status === 'processing',
+    fetchJob,
+  );
+
+  const stepLabels: Record<string, string> = {
+    scraping: 'Scraping posting',
+    parsing: 'Parsing requirements',
+    tailoring: 'Tailoring resume',
+    compiling: 'Compiling PDF',
+  };
+
+  const stepVariant = (state: string): 'default' | 'secondary' | 'destructive' => {
+    if (state === 'completed') return 'default';
+    if (state === 'failed') return 'destructive';
+    return 'secondary';
+  };
 
   if (loading) {
     return (
@@ -84,11 +104,23 @@ export default function JobDetailsPage() {
         <CardContent className="p-6 flex-1 overflow-auto">
           {job.status === 'processing' ? (
             <div className="flex items-center justify-center h-full">
-              <div className="text-center space-y-4">
+              <div className="text-center space-y-4 max-w-md w-full">
                 <Loader2 className="h-12 w-12 animate-spin text-primary mx-auto" />
                 <p className="text-muted-foreground">
                   Tailoring resume... This may take a minute.
                 </p>
+                <div className="space-y-2 text-left">
+                  {stepOrder.map((step) => (
+                    <div key={step} className="flex items-center justify-between rounded border px-3 py-2">
+                      <span className="text-sm">{stepLabels[step]}</span>
+                      <Badge variant={stepVariant(stepStates[step])}>{stepStates[step]}</Badge>
+                    </div>
+                  ))}
+                </div>
+                {streamError && <p className="text-sm text-destructive">{streamError}</p>}
+                {!connected && !streamError && (
+                  <p className="text-xs text-muted-foreground">Connecting to live progress…</p>
+                )}
               </div>
             </div>
           ) : job.status === 'failed' ? (

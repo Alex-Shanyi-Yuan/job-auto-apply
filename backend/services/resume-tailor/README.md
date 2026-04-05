@@ -49,6 +49,7 @@ Get your Gemini API key from: https://makersuite.google.com/app/apikey
 | `/apply`             | POST   | Start resume tailoring |
 | `/jobs`              | GET    | List all applied jobs  |
 | `/jobs/{id}`         | GET    | Get job details        |
+| `/jobs/{id}/stream`  | GET    | Stream live SSE progress for resume tailoring |
 | `/jobs/{id}/pdf`     | GET    | Download tailored PDF  |
 | `/jobs/{id}/dismiss` | POST   | Dismiss a suggestion   |
 

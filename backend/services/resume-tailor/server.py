@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
@@ -17,6 +17,7 @@ from database import create_db_and_tables, get_session, Job, JobSource, JobStage
 from core import JobParsingAgent, ResumeTailorAgent, JobDiscoveryAgent, JobScoringAgent, compile_pdf
 from core.db_sync import reconcile_postgres_and_sqlite
 from core.site_plugins import resolve_job_url
+from core.event_bus import event_bus, EventType, JobEvent
 
 # Configure Logging
 logging.basicConfig(
@@ -377,8 +378,27 @@ async def process_application(job_id: int, url: str):
             logger.error(f"Job {job_id} not found in database")
             return
 
+        current_step: Optional[str] = None
         try:
+            await event_bus.emit(
+                JobEvent(
+                    type=EventType.PIPELINE_STARTED,
+                    timestamp=utcnow(),
+                    job_id=job_id,
+                    data={"status": job.status},
+                )
+            )
+
             # 1. Scrape
+            current_step = "scraping"
+            await event_bus.emit(
+                JobEvent(
+                    type=EventType.STEP_STARTED,
+                    timestamp=utcnow(),
+                    job_id=job_id,
+                    step=current_step,
+                )
+            )
             logger.debug(f"Scraping URL: {url}")
             async with httpx.AsyncClient() as client:
                 response = await client.post(f"{SCRAPER_SERVICE_URL}/scrape", json={"url": url}, timeout=60.0)
@@ -386,8 +406,25 @@ async def process_application(job_id: int, url: str):
                 data = response.json()
                 raw_text = data["text"]
             logger.debug("Scraping completed successfully")
+            await event_bus.emit(
+                JobEvent(
+                    type=EventType.STEP_COMPLETED,
+                    timestamp=utcnow(),
+                    job_id=job_id,
+                    step=current_step,
+                )
+            )
             
             # 2. Parse (run in thread to avoid blocking event loop)
+            current_step = "parsing"
+            await event_bus.emit(
+                JobEvent(
+                    type=EventType.STEP_STARTED,
+                    timestamp=utcnow(),
+                    job_id=job_id,
+                    step=current_step,
+                )
+            )
             logger.debug("Parsing job description")
             parsing_agent = JobParsingAgent()
             job_posting = await asyncio.to_thread(parsing_agent.parse, raw_text)
@@ -400,14 +437,49 @@ async def process_application(job_id: int, url: str):
             session.add(job)
             session.commit()
             logger.info(f"Job parsed: {job.company} - {job.title}")
+            await event_bus.emit(
+                JobEvent(
+                    type=EventType.STEP_COMPLETED,
+                    timestamp=utcnow(),
+                    job_id=job_id,
+                    step=current_step,
+                    data={"company": job.company, "title": job.title},
+                )
+            )
             
             # 3. Tailor (run in thread to avoid blocking event loop)
+            current_step = "tailoring"
+            await event_bus.emit(
+                JobEvent(
+                    type=EventType.STEP_STARTED,
+                    timestamp=utcnow(),
+                    job_id=job_id,
+                    step=current_step,
+                )
+            )
             logger.debug("Tailoring resume")
             master_latex = load_master_resume(MASTER_RESUME_PATH)
             tailor_agent = ResumeTailorAgent()
             tailored_latex = await asyncio.to_thread(tailor_agent.tailor, master_latex, job_posting)
+            await event_bus.emit(
+                JobEvent(
+                    type=EventType.STEP_COMPLETED,
+                    timestamp=utcnow(),
+                    job_id=job_id,
+                    step=current_step,
+                )
+            )
             
             # 4. Compile (run in thread to avoid blocking event loop)
+            current_step = "compiling"
+            await event_bus.emit(
+                JobEvent(
+                    type=EventType.STEP_STARTED,
+                    timestamp=utcnow(),
+                    job_id=job_id,
+                    step=current_step,
+                )
+            )
             logger.debug("Compiling PDF")
             # Sanitize company name and job title for filename
             company_name = "".join(c for c in job_posting.company_name if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_')
@@ -421,20 +493,95 @@ async def process_application(job_id: int, url: str):
                 job_title=job_title,
                 cleanup=True
             )
+            await event_bus.emit(
+                JobEvent(
+                    type=EventType.STEP_COMPLETED,
+                    timestamp=utcnow(),
+                    job_id=job_id,
+                    step=current_step,
+                )
+            )
             
             # 5. Save path
             job.pdf_path = pdf_path
             job.status = "active"
             session.add(job)
             session.commit()
+            await event_bus.emit(
+                JobEvent(
+                    type=EventType.PIPELINE_COMPLETED,
+                    timestamp=utcnow(),
+                    job_id=job_id,
+                    data={"status": job.status, "pdf_path": pdf_path},
+                )
+            )
             logger.info(f"Job {job_id} processing completed successfully. PDF saved at {pdf_path}")
             
         except Exception as e:
             logger.exception(f"Error processing job {job_id}: {e}")
+            if current_step:
+                await event_bus.emit(
+                    JobEvent(
+                        type=EventType.STEP_FAILED,
+                        timestamp=utcnow(),
+                        job_id=job_id,
+                        step=current_step,
+                        error=str(e),
+                    )
+                )
+            await event_bus.emit(
+                JobEvent(
+                    type=EventType.PIPELINE_FAILED,
+                    timestamp=utcnow(),
+                    job_id=job_id,
+                    step=current_step,
+                    error=str(e),
+                )
+            )
             job.status = "failed"
             job.error_message = str(e)
             session.add(job)
             session.commit()
+
+
+@app.get("/jobs/{job_id}/stream")
+async def stream_job_events(job_id: int):
+    """Stream job pipeline progress events over SSE."""
+    with Session(engine) as session:
+        job = session.get(Job, job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+    queue = await event_bus.create_job_queue(job_id)
+    terminal_events = {EventType.PIPELINE_COMPLETED, EventType.PIPELINE_FAILED}
+
+    async def event_generator():
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    yield f"event: {event.type.value}\ndata: {json.dumps(event.to_dict())}\n\n"
+                    if event.type in terminal_events:
+                        break
+                except asyncio.TimeoutError:
+                    keepalive = {
+                        "type": "keepalive",
+                        "timestamp": utcnow().isoformat(),
+                        "job_id": job_id,
+                    }
+                    yield f"event: keepalive\ndata: {json.dumps(keepalive)}\n\n"
+        finally:
+            await event_bus.cleanup_job_queue(job_id)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 async def process_single_source(

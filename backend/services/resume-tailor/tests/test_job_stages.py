@@ -1,11 +1,15 @@
 """Tests for job stage tracking endpoints."""
 import pytest
+import asyncio
 from fastapi.testclient import TestClient
 from sqlmodel import Session, create_engine, select
 from sqlmodel.pool import StaticPool
 from database import SQLModel, Job, JobStage, utcnow, get_session
+from core.event_bus import JobEvent, EventType
 import server
 from server import app
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 def test_get_jobs_includes_stages(session: Session, client: TestClient):
     """Test GET /jobs includes stages for all jobs."""
@@ -461,3 +465,146 @@ def test_apply_existing_job_is_idempotent_for_applied_stage(session: Session, cl
         )
     ).all()
     assert len(stages) == 1
+
+
+def test_job_stream_endpoint_returns_sse_events(session: Session, client: TestClient, monkeypatch):
+    """Test GET /jobs/{job_id}/stream returns event-stream payload."""
+    job = Job(url="http://stream-test.com", company="TestCo", title="SWE", status="processing", retry_count=0)
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+
+    queue = asyncio.Queue()
+    queue.put_nowait(
+        JobEvent(
+            type=EventType.STEP_STARTED,
+            timestamp=utcnow(),
+            job_id=job.id,
+            step="scraping",
+        )
+    )
+    queue.put_nowait(
+        JobEvent(
+            type=EventType.PIPELINE_COMPLETED,
+            timestamp=utcnow(),
+            job_id=job.id,
+        )
+    )
+
+    async def create_job_queue(_: int):
+        return queue
+
+    cleanup_mock = AsyncMock()
+    monkeypatch.setattr(server.event_bus, "create_job_queue", create_job_queue)
+    monkeypatch.setattr(server.event_bus, "cleanup_job_queue", cleanup_mock)
+
+    with client.stream("GET", f"/jobs/{job.id}/stream") as response:
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        body = "\n".join([line for line in response.iter_lines() if line])
+
+    assert "event: step_started" in body
+    assert "event: pipeline_completed" in body
+    assert "\"step\": \"scraping\"" in body
+    cleanup_mock.assert_awaited_once_with(job.id)
+
+
+@pytest.mark.asyncio
+async def test_process_application_emits_pipeline_events_on_success(session: Session, monkeypatch):
+    """process_application should emit lifecycle and step events through event bus."""
+    job = Job(url="http://emit-success.com", company="Unknown", title="Unknown", status="processing", retry_count=0)
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+
+    emitted: list[JobEvent] = []
+
+    async def capture_emit(event: JobEvent):
+        emitted.append(event)
+
+    class FakeScrapeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"text": "job description text"}
+
+    class FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return FakeScrapeResponse()
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(
+        server,
+        "JobParsingAgent",
+        lambda: SimpleNamespace(
+            parse=lambda _: SimpleNamespace(
+                company_name="Acme",
+                job_title="Software Engineer",
+                key_requirements=["Python", "FastAPI"],
+            )
+        ),
+    )
+    monkeypatch.setattr(server, "load_master_resume", lambda _: "master")
+    monkeypatch.setattr(server, "ResumeTailorAgent", lambda: SimpleNamespace(tailor=lambda *_: "tailored"))
+    monkeypatch.setattr(server, "compile_pdf", lambda **_: "./output/acme.pdf")
+    monkeypatch.setattr(server.event_bus, "emit", capture_emit)
+
+    await server.process_application(job.id, job.url)
+
+    event_types = [event.type for event in emitted]
+    assert event_types[0] == EventType.PIPELINE_STARTED
+    assert event_types[-1] == EventType.PIPELINE_COMPLETED
+    assert event_types.count(EventType.STEP_STARTED) == 4
+    assert event_types.count(EventType.STEP_COMPLETED) == 4
+
+
+@pytest.mark.asyncio
+async def test_process_application_emits_pipeline_failed_on_exception(session: Session, monkeypatch):
+    """process_application should emit failure event when processing fails."""
+    job = Job(url="http://emit-fail.com", company="Unknown", title="Unknown", status="processing", retry_count=0)
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+
+    emitted: list[JobEvent] = []
+
+    async def capture_emit(event: JobEvent):
+        emitted.append(event)
+
+    class FakeScrapeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"text": "job description text"}
+
+    class FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return FakeScrapeResponse()
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(
+        server,
+        "JobParsingAgent",
+        lambda: SimpleNamespace(parse=lambda _: (_ for _ in ()).throw(ValueError("parse failed"))),
+    )
+    monkeypatch.setattr(server.event_bus, "emit", capture_emit)
+
+    await server.process_application(job.id, job.url)
+
+    session.refresh(job)
+    assert job.status == "failed"
+    assert any(event.type == EventType.PIPELINE_FAILED for event in emitted)
