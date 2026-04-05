@@ -35,7 +35,13 @@ def client_fixture(session: Session):
 def test_update_job_stages_creates_new_stages(session: Session, client: TestClient):
     """Test creating new stages for a job."""
     # Create a test job
-    job = Job(url="http://test.com", company="TestCo", title="SWE", status="applied")
+    job = Job(
+        url="http://test.com", 
+        company="TestCo", 
+        title="SWE", 
+        status="applied",
+        retry_count=0  # Explicitly set to avoid missing column error
+    )
     session.add(job)
     session.commit()
     session.refresh(job)
@@ -70,7 +76,13 @@ def test_update_job_stages_creates_new_stages(session: Session, client: TestClie
 def test_update_job_stages_unchecks_existing_stage(session: Session, client: TestClient):
     """Test unchecking a previously completed stage."""
     # Create job with existing stage
-    job = Job(url="http://test.com", company="TestCo", title="SWE", status="active")
+    job = Job(
+        url="http://test.com", 
+        company="TestCo", 
+        title="SWE", 
+        status="active",
+        retry_count=0
+    )
     session.add(job)
     session.commit()
     
@@ -94,7 +106,13 @@ def test_update_job_stages_unchecks_existing_stage(session: Session, client: Tes
 
 def test_update_job_stages_with_rejection(session: Session, client: TestClient):
     """Test marking a job as rejected at a specific stage."""
-    job = Job(url="http://test.com", company="TestCo", title="SWE", status="active")
+    job = Job(
+        url="http://test.com", 
+        company="TestCo", 
+        title="SWE", 
+        status="active",
+        retry_count=0
+    )
     session.add(job)
     session.commit()
     
