@@ -880,7 +880,7 @@ async def test_process_application_retries_tailoring_then_succeeds(session: Sess
     def flaky_tailor(*_args):
         attempts["count"] += 1
         if attempts["count"] == 1:
-            raise ValueError("transient tailor failure")
+            raise RuntimeError("transient tailor failure")
         return "\\begin{document}tailored\\end{document}"
 
     monkeypatch.setattr(server, "ResumeTailorAgent", lambda: SimpleNamespace(tailor=flaky_tailor))

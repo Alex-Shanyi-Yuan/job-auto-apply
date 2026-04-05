@@ -530,7 +530,7 @@ async def process_application(job_id: int, url: str):
                     if post_hook_summary.denied:
                         raise ValueError(f"Hook failed after tailoring: {post_hook_summary.message}")
                     break
-                except ValueError as tailoring_error:
+                except Exception as tailoring_error:
                     if job.retry_count < MAX_RETRIES:
                         job.retry_count += 1
                         session.add(job)

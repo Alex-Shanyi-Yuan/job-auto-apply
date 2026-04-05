@@ -126,7 +126,13 @@ class AgentHookRunner:
 
         for hook in hooks:
             await self._emit(EventType.HOOK_STARTED, job_id, step, hook.name)
-            decision = hook.evaluate(context)
+            try:
+                decision = hook.evaluate(context)
+            except Exception as hook_error:
+                summary.denied = True
+                summary.message = str(hook_error) or f"Hook failed: {hook.name}"
+                await self._emit(EventType.HOOK_FAILED, job_id, step, hook.name, summary.message)
+                return summary
             if decision.result == HookResult.ALLOW:
                 await self._emit(EventType.HOOK_VALIDATED, job_id, step, hook.name, decision.message)
                 continue

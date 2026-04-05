@@ -70,6 +70,13 @@ class _DenyHook(Hook):
         return HookDecision(result=HookResult.DENY, message="denied")
 
 
+class _ExplodeHook(Hook):
+    name = "explode-hook"
+
+    def evaluate(self, context: HookContext) -> HookDecision:
+        raise RuntimeError("hook crashed")
+
+
 @pytest.mark.asyncio
 async def test_agent_hook_runner_emits_warn_and_deny_events():
     bus = EventBus()
@@ -153,3 +160,22 @@ async def test_agent_hook_runner_emits_validated_event_for_allow():
     assert summary.denied is False
     assert EventType.HOOK_STARTED in event_types
     assert EventType.HOOK_VALIDATED in event_types
+
+
+@pytest.mark.asyncio
+async def test_agent_hook_runner_handles_hook_exception_as_failed():
+    bus = EventBus()
+    await bus.create_job_queue(9)
+    runner = AgentHookRunner(bus)
+
+    summary = await runner.run_post_hooks(job_id=9, step="tailoring", hooks=[_ExplodeHook()], payload={"x": 1})
+
+    queue = await bus.get_job_queue(9)
+    event_types = []
+    while not queue.empty():
+        event_types.append((await queue.get()).type)
+
+    assert summary.denied is True
+    assert "hook crashed" in (summary.message or "")
+    assert EventType.HOOK_STARTED in event_types
+    assert EventType.HOOK_FAILED in event_types
