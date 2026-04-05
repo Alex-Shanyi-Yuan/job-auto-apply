@@ -491,16 +491,19 @@ def test_job_stream_endpoint_returns_sse_events(session: Session, client: TestCl
         )
     )
 
-    async def create_job_queue(_: int):
+    async def get_job_queue(_: int):
         return queue
 
-    monkeypatch.setattr(server.event_bus, "create_job_queue", create_job_queue)
+    monkeypatch.setattr(server.event_bus, "get_job_queue", get_job_queue)
+    create_queue_mock = AsyncMock(return_value=queue)
+    monkeypatch.setattr(server.event_bus, "create_job_queue", create_queue_mock)
 
     with client.stream("GET", f"/jobs/{job.id}/stream") as response:
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("text/event-stream")
         body = "\n".join([line for line in response.iter_lines() if line])
 
+    create_queue_mock.assert_not_awaited()
     assert "event: step_started" in body
     assert "event: pipeline_completed" in body
     assert "\"step\": \"scraping\"" in body
@@ -511,6 +514,68 @@ def test_job_stream_endpoint_returns_404_when_job_missing(client: TestClient):
     response = client.get("/jobs/99999/stream")
     assert response.status_code == 404
     assert response.json() == {"detail": "Job not found"}
+
+
+def test_job_stream_endpoint_returns_409_for_non_processing_without_queue(
+    session: Session, client: TestClient, monkeypatch
+):
+    """Non-processing jobs without an active queue should return explicit 409."""
+    job = Job(url="http://stream-idle.com", company="TestCo", title="SWE", status="applied", retry_count=0)
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+
+    get_queue_mock = AsyncMock(return_value=None)
+    create_queue_mock = AsyncMock()
+    monkeypatch.setattr(server.event_bus, "get_job_queue", get_queue_mock)
+    monkeypatch.setattr(server.event_bus, "create_job_queue", create_queue_mock)
+
+    response = client.get(f"/jobs/{job.id}/stream")
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": "No active event stream for this job because it is not processing"
+    }
+    create_queue_mock.assert_not_awaited()
+
+
+def test_job_stream_endpoint_waits_briefly_for_processing_queue(session: Session, client: TestClient, monkeypatch):
+    """Processing jobs should tolerate short queue creation races."""
+    job = Job(url="http://stream-race.com", company="TestCo", title="SWE", status="processing", retry_count=0)
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+
+    queue = asyncio.Queue()
+    queue.put_nowait(
+        JobEvent(
+            type=EventType.PIPELINE_COMPLETED,
+            timestamp=utcnow(),
+            job_id=job.id,
+        )
+    )
+
+    calls = {"count": 0}
+
+    async def delayed_get_job_queue(_: int):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return None
+        return queue
+
+    monkeypatch.setattr(server, "STREAM_QUEUE_WAIT_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(server, "STREAM_QUEUE_WAIT_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(server.event_bus, "get_job_queue", delayed_get_job_queue)
+    create_queue_mock = AsyncMock(return_value=queue)
+    monkeypatch.setattr(server.event_bus, "create_job_queue", create_queue_mock)
+
+    with client.stream("GET", f"/jobs/{job.id}/stream") as response:
+        assert response.status_code == 200
+        body = "\n".join([line for line in response.iter_lines() if line])
+
+    assert calls["count"] >= 2
+    create_queue_mock.assert_not_awaited()
+    assert "event: pipeline_completed" in body
 
 
 @pytest.mark.asyncio

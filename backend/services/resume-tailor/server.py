@@ -102,6 +102,8 @@ MASTER_RESUME_PATH = os.getenv("MASTER_RESUME_PATH", "./data/master.tex")
 RATE_LIMIT_DELAY = float(os.getenv("RATE_LIMIT_DELAY", "0.2"))  # Seconds between scrapes (reduced for speed)
 MAX_CONCURRENT_SOURCES = int(os.getenv("MAX_CONCURRENT_SOURCES", "5"))  # Max parallel source scans
 MAX_CONCURRENT_JOBS = int(os.getenv("MAX_CONCURRENT_JOBS", "10"))  # Max parallel job scrapes per source
+STREAM_QUEUE_WAIT_TIMEOUT_SECONDS = float(os.getenv("STREAM_QUEUE_WAIT_TIMEOUT_SECONDS", "1.0"))
+STREAM_QUEUE_WAIT_INTERVAL_SECONDS = float(os.getenv("STREAM_QUEUE_WAIT_INTERVAL_SECONDS", "0.05"))
 
 # Global scan status tracking
 scan_status = {
@@ -555,7 +557,26 @@ async def stream_job_events(job_id: int):
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
 
-    queue = await event_bus.create_job_queue(job_id)
+    queue = await event_bus.get_job_queue(job_id)
+    if not queue and job.status == "processing":
+        deadline = asyncio.get_running_loop().time() + STREAM_QUEUE_WAIT_TIMEOUT_SECONDS
+        while asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(STREAM_QUEUE_WAIT_INTERVAL_SECONDS)
+            queue = await event_bus.get_job_queue(job_id)
+            if queue:
+                break
+
+    if not queue:
+        if job.status != "processing":
+            raise HTTPException(
+                status_code=409,
+                detail="No active event stream for this job because it is not processing",
+            )
+        raise HTTPException(
+            status_code=409,
+            detail="Job is processing but event stream is not ready yet; retry shortly",
+        )
+
     terminal_events = {EventType.PIPELINE_COMPLETED, EventType.PIPELINE_FAILED}
 
     async def event_generator():
