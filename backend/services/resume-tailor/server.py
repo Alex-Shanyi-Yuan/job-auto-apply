@@ -226,12 +226,12 @@ class StageUpdate(BaseModel):
 
 class UpdateJobStagesRequest(BaseModel):
     stages: list[StageUpdate]
-    rejection_stage: Optional[str] = None
+    rejection_stage: Optional[StageName] = None
     rejection_reason: Optional[str] = None
 
 
 class JobStageResponse(BaseModel):
-    stage_name: str
+    stage_name: StageName
     completed_at: Optional[str] = None
     notes: Optional[str] = None
 
@@ -244,9 +244,10 @@ class JobWithStagesResponse(BaseModel):
     status: str
     score: Optional[int] = None
     stages: list[JobStageResponse]
-    rejection_stage: Optional[str] = None
+    rejection_stage: Optional[StageName] = None
     rejection_reason: Optional[str] = None
     created_at: str
+    updated_at: str
 
 
 class JobDetailResponse(BaseModel):
@@ -261,10 +262,10 @@ class JobDetailResponse(BaseModel):
     error_message: Optional[str] = None
     pdf_path: Optional[str] = None
     stages: list[JobStageResponse]
-    rejection_stage: Optional[str] = None
+    rejection_stage: Optional[StageName] = None
     rejection_reason: Optional[str] = None
     created_at: str
-    updated_at: str  # Include this field
+    updated_at: str
 
 
 # === Helper Functions ===
@@ -308,6 +309,29 @@ def load_master_resume(file_path: str) -> str:
         raise FileNotFoundError(f"Master resume not found: {file_path}")
     with open(path, 'r', encoding='utf-8') as f:
         return f.read()
+
+
+def ensure_applied_stage(session: Session, job_id: int) -> JobStage:
+    """Ensure a job has a completed 'applied' stage without creating duplicates."""
+    applied_stage = session.exec(
+        select(JobStage).where(
+            JobStage.job_id == job_id,
+            JobStage.stage_name == StageName.APPLIED.value
+        )
+    ).first()
+
+    if not applied_stage:
+        applied_stage = JobStage(
+            job_id=job_id,
+            stage_name=StageName.APPLIED.value,
+            completed_at=utcnow(),
+        )
+        session.add(applied_stage)
+    elif applied_stage.completed_at is None:
+        applied_stage.completed_at = utcnow()
+        applied_stage.updated_at = utcnow()
+
+    return applied_stage
 
 
 def job_to_response(job: Job) -> JobResponse:
@@ -393,7 +417,7 @@ async def process_application(job_id: int, url: str):
             
             # 5. Save path
             job.pdf_path = pdf_path
-            job.status = "applied"
+            job.status = "active"
             session.add(job)
             session.commit()
             logger.info(f"Job {job_id} processing completed successfully. PDF saved at {pdf_path}")
@@ -745,8 +769,9 @@ async def apply_job(request: ApplyRequest, background_tasks: BackgroundTasks):
         ).first()
         
         if existing_job:
-            # Update existing job to processing status
+            # Move to processing and ensure initial applied stage exists.
             existing_job.status = "processing"
+            ensure_applied_stage(session, existing_job.id)
             session.add(existing_job)
             session.commit()
             session.refresh(existing_job)
@@ -757,6 +782,10 @@ async def apply_job(request: ApplyRequest, background_tasks: BackgroundTasks):
             session.add(job)
             session.commit()
             session.refresh(job)
+            ensure_applied_stage(session, job.id)
+            session.add(job)
+            session.commit()
+            session.refresh(job)
     
     # Start background processing
     background_tasks.add_task(process_application, job.id, request.url)
@@ -764,7 +793,7 @@ async def apply_job(request: ApplyRequest, background_tasks: BackgroundTasks):
     return job_to_response(job)
 
 
-@app.get("/jobs", response_model=List[JobResponse])
+@app.get("/jobs", response_model=List[JobDetailResponse])
 def list_jobs():
     """Get all jobs (excludes suggested and dismissed jobs)."""
     with Session(engine) as session:
@@ -809,7 +838,7 @@ def get_job(job_id: int):
             select(JobStage).where(
                 JobStage.job_id == job_id,
                 JobStage.completed_at.isnot(None)
-            ).order_by(JobStage.completed_at)  # ADD THIS
+            ).order_by(JobStage.completed_at)
         ).all()
         return {
             "id": job.id,
@@ -832,7 +861,7 @@ def get_job(job_id: int):
             "rejection_stage": job.rejection_stage,
             "rejection_reason": job.rejection_reason,
             "created_at": job.created_at.isoformat(),
-            "updated_at": job.updated_at.isoformat(),  # ADD THIS
+            "updated_at": job.updated_at.isoformat(),
         }
 
 
@@ -1016,11 +1045,12 @@ def update_job_stages(job_id: int, request: UpdateJobStagesRequest):
         
         # Update each stage
         for stage_update in request.stages:
+            stage_name = stage_update.name.value
             # Get or create stage
             stage = session.exec(
                 select(JobStage).where(
                     JobStage.job_id == job_id,
-                    JobStage.stage_name == stage_update.name
+                    JobStage.stage_name == stage_name
                 )
             ).first()
             
@@ -1029,7 +1059,7 @@ def update_job_stages(job_id: int, request: UpdateJobStagesRequest):
                 if not stage:
                     stage = JobStage(
                         job_id=job_id,
-                        stage_name=stage_update.name,
+                        stage_name=stage_name,
                         completed_at=utcnow(),
                         notes=stage_update.notes
                     )
@@ -1047,10 +1077,16 @@ def update_job_stages(job_id: int, request: UpdateJobStagesRequest):
                     stage.updated_at = utcnow()
         
         # Update rejection info
-        if request.rejection_stage:
+        if "rejection_stage" in request.model_fields_set and request.rejection_stage:
             job.status = "rejected"
-            job.rejection_stage = request.rejection_stage
+            job.rejection_stage = request.rejection_stage.value
             job.rejection_reason = request.rejection_reason
+            job.updated_at = utcnow()
+        elif "rejection_stage" in request.model_fields_set:
+            # Explicitly clear rejection details when rejection_stage is set to null.
+            job.rejection_stage = None
+            job.rejection_reason = None
+            job.status = "active"
             job.updated_at = utcnow()
         else:
             # Update status to active if any completed stages exist
@@ -1060,7 +1096,7 @@ def update_job_stages(job_id: int, request: UpdateJobStagesRequest):
                     JobStage.completed_at.isnot(None)
                 )
             ).first()
-            if has_completed_stages:
+            if has_completed_stages and not job.rejection_stage:
                 job.status = "active"
         
         session.commit()
@@ -1071,7 +1107,7 @@ def update_job_stages(job_id: int, request: UpdateJobStagesRequest):
             select(JobStage).where(
                 JobStage.job_id == job_id,
                 JobStage.completed_at.isnot(None)
-            )
+            ).order_by(JobStage.completed_at)
         ).all()
         
         return JobWithStagesResponse(
@@ -1091,7 +1127,8 @@ def update_job_stages(job_id: int, request: UpdateJobStagesRequest):
             ],
             rejection_stage=job.rejection_stage,
             rejection_reason=job.rejection_reason,
-            created_at=job.created_at.isoformat()
+            created_at=job.created_at.isoformat(),
+            updated_at=job.updated_at.isoformat(),
         )
 
 

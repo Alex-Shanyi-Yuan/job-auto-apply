@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, create_engine, select
 from sqlmodel.pool import StaticPool
 from database import SQLModel, Job, JobStage, utcnow, get_session
+import server
 from server import app
 
 def test_get_jobs_includes_stages(session: Session, client: TestClient):
@@ -43,6 +44,7 @@ def session_fixture(monkeypatch):
         poolclass=StaticPool,
     )
     SQLModel.metadata.create_all(engine)
+    monkeypatch.setattr(server, "engine", engine)
     with Session(engine) as session:
         yield session
 
@@ -181,3 +183,168 @@ def test_update_job_stages_with_rejection(session: Session, client: TestClient):
     assert data["status"] == "rejected"
     assert data["rejection_stage"] == "oa"
     assert data["rejection_reason"] == "Failed technical assessment"
+
+
+def test_update_job_stages_clears_rejection_with_null(session: Session, client: TestClient):
+    """Test clearing rejection metadata when rejection_stage is explicitly null."""
+    job = Job(
+        url="http://test-clear-rejection.com",
+        company="TestCo",
+        title="SWE",
+        status="rejected",
+        rejection_stage="interview",
+        rejection_reason="Initial rejection note",
+        retry_count=0,
+    )
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+
+    response = client.put(f"/jobs/{job.id}/stages", json={
+        "stages": [{"name": "applied", "completed": True}],
+        "rejection_stage": None,
+        "rejection_reason": None
+    })
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "active"
+    assert data["rejection_stage"] is None
+    assert data["rejection_reason"] is None
+
+
+def test_update_job_stages_rejects_invalid_rejection_stage(session: Session, client: TestClient):
+    """Test enum validation rejects invalid rejection stage values."""
+    job = Job(
+        url="http://test-invalid-rejection.com",
+        company="TestCo",
+        title="SWE",
+        status="active",
+        retry_count=0,
+    )
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+
+    response = client.put(f"/jobs/{job.id}/stages", json={
+        "stages": [{"name": "applied", "completed": True}],
+        "rejection_stage": "phone_screen",
+        "rejection_reason": "Invalid stage value"
+    })
+
+    assert response.status_code == 422
+
+
+def test_update_job_stages_clears_rejection_without_completed_stages(session: Session, client: TestClient):
+    """Clearing rejection should move job back to active even when no stage remains completed."""
+    job = Job(
+        url="http://test-clear-no-stages.com",
+        company="TestCo",
+        title="SWE",
+        status="rejected",
+        rejection_stage="oa",
+        rejection_reason="Failed OA",
+        retry_count=0,
+    )
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+
+    response = client.put(f"/jobs/{job.id}/stages", json={
+        "stages": [{"name": "applied", "completed": False}],
+        "rejection_stage": None,
+        "rejection_reason": None
+    })
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "active"
+    assert data["rejection_stage"] is None
+    assert data["rejection_reason"] is None
+
+
+def test_update_job_stages_without_rejection_field_preserves_existing_rejection(session: Session, client: TestClient):
+    """Omitting rejection_stage should not silently clear existing rejection metadata."""
+    job = Job(
+        url="http://test-preserve-rejection.com",
+        company="TestCo",
+        title="SWE",
+        status="rejected",
+        rejection_stage="oa",
+        rejection_reason="Failed OA",
+        retry_count=0,
+    )
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+
+    response = client.put(f"/jobs/{job.id}/stages", json={
+        "stages": [{"name": "applied", "completed": True}]
+    })
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "rejected"
+    assert data["rejection_stage"] == "oa"
+    assert data["rejection_reason"] == "Failed OA"
+
+
+def test_apply_creates_initial_applied_stage(session: Session, client: TestClient, monkeypatch):
+    """Test POST /apply creates initial applied stage immediately."""
+    async def mock_process_application(job_id: int, url: str):
+        return None
+
+    monkeypatch.setattr(server, "process_application", mock_process_application)
+
+    response = client.post("/apply", json={"url": "http://apply-test.com"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "processing"
+
+    job = session.exec(select(Job).where(Job.url == "http://apply-test.com")).first()
+    assert job is not None
+    assert job.status == "processing"
+
+    stages = session.exec(
+        select(JobStage).where(
+            JobStage.job_id == job.id,
+            JobStage.stage_name == "applied"
+        )
+    ).all()
+    assert len(stages) == 1
+    assert stages[0].completed_at is not None
+
+
+def test_apply_existing_job_is_idempotent_for_applied_stage(session: Session, client: TestClient, monkeypatch):
+    """Test repeated POST /apply does not create duplicate applied stages."""
+    async def mock_process_application(job_id: int, url: str):
+        return None
+
+    monkeypatch.setattr(server, "process_application", mock_process_application)
+
+    existing_job = Job(url="http://existing-job.com", company="TestCo", title="SWE", status="suggested", retry_count=0)
+    session.add(existing_job)
+    session.commit()
+    session.refresh(existing_job)
+
+    existing_stage = JobStage(job_id=existing_job.id, stage_name="applied", completed_at=utcnow())
+    session.add(existing_stage)
+    session.commit()
+
+    first_response = client.post("/apply", json={"url": "http://existing-job.com"})
+    second_response = client.post("/apply", json={"url": "http://existing-job.com"})
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+
+    session.refresh(existing_job)
+    assert existing_job.status == "processing"
+
+    stages = session.exec(
+        select(JobStage).where(
+            JobStage.job_id == existing_job.id,
+            JobStage.stage_name == "applied"
+        )
+    ).all()
+    assert len(stages) == 1

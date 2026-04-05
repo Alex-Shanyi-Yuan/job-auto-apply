@@ -35,7 +35,7 @@ class Job(SQLModel, table=True):
     url: str
     company: str
     title: str
-    status: str = "suggested"  # suggested, applied, interviewing, rejected, offer, dismissed, failed
+    status: str = "suggested"  # suggested, processing, active, rejected, dismissed, failed
     requirements: Optional[str] = None  # JSON string of key requirements
     pdf_path: Optional[str] = None
     score: Optional[int] = None  # Match score 0-100
