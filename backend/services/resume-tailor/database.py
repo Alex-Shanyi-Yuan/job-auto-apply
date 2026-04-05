@@ -41,6 +41,7 @@ class Job(SQLModel, table=True):
     score: Optional[int] = None  # Match score 0-100
     source_id: Optional[int] = Field(default=None, foreign_key="jobsource.id")
     error_message: Optional[str] = None  # Error message if processing failed
+    retry_count: int = 0  # Track automatic retry attempts
     rejection_stage: Optional[str] = None  # 'applied' | 'oa' | 'interview' | 'offer'
     rejection_reason: Optional[str] = None  # Free-form rejection notes
     created_at: datetime = Field(default_factory=utcnow)

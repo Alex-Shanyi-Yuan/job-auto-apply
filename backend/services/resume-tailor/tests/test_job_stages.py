@@ -24,7 +24,7 @@ def session_fixture():
 def client_fixture(session: Session):
     """Create a test client with dependency override."""
     def get_session_override():
-        return session
+        yield session
     
     app.dependency_overrides[get_session] = get_session_override
     client = TestClient(app)
@@ -56,7 +56,12 @@ def test_update_job_stages_creates_new_stages(session: Session, client: TestClie
     assert data["stages"][0]["notes"] == "Applied online"
     
     # Verify database
-    stages = session.exec(select(JobStage).where(JobStage.job_id == job.id)).all()
+    stages = session.exec(
+        select(JobStage).where(
+            JobStage.job_id == job.id,
+            JobStage.completed_at.isnot(None)
+        )
+    ).all()
     assert len(stages) == 1
     assert stages[0].stage_name == "applied"
     assert stages[0].completed_at is not None

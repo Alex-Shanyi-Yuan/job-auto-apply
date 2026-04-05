@@ -3,6 +3,7 @@ from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
+from enum import Enum
 import httpx
 import os
 import json
@@ -209,8 +210,15 @@ class GlobalFilterUpdate(BaseModel):
     filter_prompt: str
 
 
+class StageName(str, Enum):
+    APPLIED = "applied"
+    OA = "oa"
+    INTERVIEW = "interview"
+    OFFER = "offer"
+
+
 class StageUpdate(BaseModel):
-    name: str  # 'applied' | 'oa' | 'interview' | 'offer'
+    name: StageName  # Change from str to StageName
     completed: bool
     notes: Optional[str] = None
 
@@ -914,7 +922,23 @@ def dismiss_job(job_id: int):
 
 @app.put("/jobs/{job_id}/stages", response_model=JobWithStagesResponse)
 def update_job_stages(job_id: int, request: UpdateJobStagesRequest):
-    """Update interview stages for a job."""
+    """Update interview stages for a job.
+    
+    Args:
+        job_id: The ID of the job to update
+        request: Stage updates and optional rejection info
+        
+    Returns:
+        JobWithStagesResponse with updated job and completed stages
+        
+    Raises:
+        HTTPException: 404 if job not found
+        
+    Notes:
+        - Only completed stages are returned in response
+        - Setting completed=False removes stage completion timestamp
+        - Rejection sets job.status to 'rejected'
+    """
     with Session(engine) as session:
         # Get job
         job = session.exec(select(Job).where(Job.id == job_id)).first()
@@ -944,24 +968,30 @@ def update_job_stages(job_id: int, request: UpdateJobStagesRequest):
                 else:
                     if stage.completed_at is None:
                         stage.completed_at = utcnow()
-                    if stage_update.notes:
-                        stage.notes = stage_update.notes
+                    if stage_update.notes is not None:  # Check for None, not truthiness
+                        stage.notes = stage_update.notes or None
+                    stage.updated_at = utcnow()
             else:
                 # Mark as not completed
                 if stage:
                     stage.completed_at = None
+                    stage.updated_at = utcnow()
         
         # Update rejection info
         if request.rejection_stage:
             job.status = "rejected"
             job.rejection_stage = request.rejection_stage
             job.rejection_reason = request.rejection_reason
+            job.updated_at = utcnow()
         else:
-            # Update status to active if any stages exist
-            has_stages = session.exec(
-                select(JobStage).where(JobStage.job_id == job_id)
+            # Update status to active if any completed stages exist
+            has_completed_stages = session.exec(
+                select(JobStage).where(
+                    JobStage.job_id == job_id,
+                    JobStage.completed_at.isnot(None)
+                )
             ).first()
-            if has_stages:
+            if has_completed_stages:
                 job.status = "active"
         
         session.commit()
