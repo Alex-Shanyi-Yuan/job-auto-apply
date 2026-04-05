@@ -1,11 +1,15 @@
 """Tests for job stage tracking endpoints."""
 import pytest
+import asyncio
 from fastapi.testclient import TestClient
 from sqlmodel import Session, create_engine, select
 from sqlmodel.pool import StaticPool
 from database import SQLModel, Job, JobStage, utcnow, get_session
+from core.event_bus import JobEvent, EventType
 import server
 from server import app
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 def test_get_jobs_includes_stages(session: Session, client: TestClient):
     """Test GET /jobs includes stages for all jobs."""
@@ -461,3 +465,500 @@ def test_apply_existing_job_is_idempotent_for_applied_stage(session: Session, cl
         )
     ).all()
     assert len(stages) == 1
+
+
+def test_job_stream_endpoint_returns_sse_events(session: Session, client: TestClient, monkeypatch):
+    """Test GET /jobs/{job_id}/stream returns event-stream payload."""
+    job = Job(url="http://stream-test.com", company="TestCo", title="SWE", status="processing", retry_count=0)
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+
+    queue = asyncio.Queue()
+    queue.put_nowait(
+        JobEvent(
+            type=EventType.STEP_STARTED,
+            timestamp=utcnow(),
+            job_id=job.id,
+            step="scraping",
+        )
+    )
+    queue.put_nowait(
+        JobEvent(
+            type=EventType.PIPELINE_COMPLETED,
+            timestamp=utcnow(),
+            job_id=job.id,
+        )
+    )
+
+    async def get_job_queue(_: int):
+        return queue
+
+    monkeypatch.setattr(server.event_bus, "get_job_queue", get_job_queue)
+    create_queue_mock = AsyncMock(return_value=queue)
+    monkeypatch.setattr(server.event_bus, "create_job_queue", create_queue_mock)
+
+    with client.stream("GET", f"/jobs/{job.id}/stream") as response:
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        body = "\n".join([line for line in response.iter_lines() if line])
+
+    create_queue_mock.assert_not_awaited()
+    assert "event: step_started" in body
+    assert "event: pipeline_completed" in body
+    assert "\"step\": \"scraping\"" in body
+
+
+def test_job_stream_endpoint_returns_404_when_job_missing(client: TestClient):
+    """Test GET /jobs/{job_id}/stream returns 404 for unknown jobs."""
+    response = client.get("/jobs/99999/stream")
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Job not found"}
+
+
+def test_job_stream_endpoint_returns_409_for_non_processing_without_queue(
+    session: Session, client: TestClient, monkeypatch
+):
+    """Non-processing jobs without an active queue should return explicit 409."""
+    job = Job(url="http://stream-idle.com", company="TestCo", title="SWE", status="applied", retry_count=0)
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+
+    get_queue_mock = AsyncMock(return_value=None)
+    create_queue_mock = AsyncMock()
+    monkeypatch.setattr(server.event_bus, "get_job_queue", get_queue_mock)
+    monkeypatch.setattr(server.event_bus, "create_job_queue", create_queue_mock)
+
+    response = client.get(f"/jobs/{job.id}/stream")
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": "No active event stream for this job because it is not processing"
+    }
+    create_queue_mock.assert_not_awaited()
+
+
+def test_job_stream_endpoint_waits_briefly_for_processing_queue(session: Session, client: TestClient, monkeypatch):
+    """Processing jobs should tolerate short queue creation races."""
+    job = Job(url="http://stream-race.com", company="TestCo", title="SWE", status="processing", retry_count=0)
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+
+    queue = asyncio.Queue()
+    queue.put_nowait(
+        JobEvent(
+            type=EventType.PIPELINE_COMPLETED,
+            timestamp=utcnow(),
+            job_id=job.id,
+        )
+    )
+
+    calls = {"count": 0}
+
+    async def delayed_get_job_queue(_: int):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return None
+        return queue
+
+    monkeypatch.setattr(server, "STREAM_QUEUE_WAIT_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(server, "STREAM_QUEUE_WAIT_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(server.event_bus, "get_job_queue", delayed_get_job_queue)
+    create_queue_mock = AsyncMock(return_value=queue)
+    monkeypatch.setattr(server.event_bus, "create_job_queue", create_queue_mock)
+
+    with client.stream("GET", f"/jobs/{job.id}/stream") as response:
+        assert response.status_code == 200
+        body = "\n".join([line for line in response.iter_lines() if line])
+
+    assert calls["count"] >= 2
+    create_queue_mock.assert_not_awaited()
+    assert "event: pipeline_completed" in body
+
+
+@pytest.mark.asyncio
+async def test_process_application_creates_queue_before_first_emit(session: Session, monkeypatch):
+    """process_application should create per-job queue before the first emitted event."""
+    job = Job(url="http://emit-order.com", company="Unknown", title="Unknown", status="processing", retry_count=0)
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+
+    call_order: list[tuple[str, EventType | None]] = []
+
+    async def create_job_queue(job_id: int):
+        call_order.append(("create", None))
+        return asyncio.Queue()
+
+    async def capture_emit(event: JobEvent):
+        call_order.append(("emit", event.type))
+
+    class FakeScrapeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"text": "job description text"}
+
+    class FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return FakeScrapeResponse()
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(
+        server,
+        "JobParsingAgent",
+        lambda: SimpleNamespace(
+            parse=lambda _: SimpleNamespace(
+                company_name="Acme",
+                job_title="Software Engineer",
+                key_requirements=["Python", "FastAPI"],
+            )
+        ),
+    )
+    monkeypatch.setattr(server, "load_master_resume", lambda _: "\\begin{document}master\\end{document}")
+    monkeypatch.setattr(
+        server,
+        "ResumeTailorAgent",
+        lambda: SimpleNamespace(tailor=lambda *_: "\\begin{document}tailored\\end{document}"),
+    )
+    monkeypatch.setattr(server, "compile_pdf", lambda **_: "./output/acme.pdf")
+    monkeypatch.setattr(server.event_bus, "create_job_queue", create_job_queue)
+    monkeypatch.setattr(server.event_bus, "emit", capture_emit)
+    monkeypatch.setattr(server.event_bus, "cleanup_job_queue", AsyncMock())
+
+    await server.process_application(job.id, job.url)
+
+    assert call_order[0] == ("create", None)
+    assert call_order[1] == ("emit", EventType.PIPELINE_STARTED)
+
+
+@pytest.mark.asyncio
+async def test_process_application_emits_pipeline_events_on_success(session: Session, monkeypatch):
+    """process_application should emit lifecycle and step events through event bus."""
+    job = Job(url="http://emit-success.com", company="Unknown", title="Unknown", status="processing", retry_count=0)
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+
+    emitted: list[JobEvent] = []
+
+    async def capture_emit(event: JobEvent):
+        emitted.append(event)
+
+    class FakeScrapeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"text": "job description text"}
+
+    class FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return FakeScrapeResponse()
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(
+        server,
+        "JobParsingAgent",
+        lambda: SimpleNamespace(
+            parse=lambda _: SimpleNamespace(
+                company_name="Acme",
+                job_title="Software Engineer",
+                key_requirements=["Python", "FastAPI"],
+            )
+        ),
+    )
+    monkeypatch.setattr(server, "load_master_resume", lambda _: "\\begin{document}master\\end{document}")
+    monkeypatch.setattr(
+        server,
+        "ResumeTailorAgent",
+        lambda: SimpleNamespace(tailor=lambda *_: "\\begin{document}tailored\\end{document}"),
+    )
+    monkeypatch.setattr(server, "compile_pdf", lambda **_: "./output/acme.pdf")
+    monkeypatch.setattr(server.event_bus, "emit", capture_emit)
+    monkeypatch.setattr(server.event_bus, "create_job_queue", AsyncMock(return_value=asyncio.Queue()))
+    cleanup_mock = AsyncMock()
+    monkeypatch.setattr(server.event_bus, "cleanup_job_queue", cleanup_mock)
+
+    await server.process_application(job.id, job.url)
+
+    event_types = [event.type for event in emitted]
+    assert event_types[0] == EventType.PIPELINE_STARTED
+    assert event_types[-1] == EventType.PIPELINE_COMPLETED
+    assert event_types.count(EventType.STEP_STARTED) == 4
+    assert event_types.count(EventType.STEP_COMPLETED) == 4
+    cleanup_mock.assert_awaited_once_with(job.id)
+
+
+@pytest.mark.asyncio
+async def test_process_application_emits_pipeline_failed_on_exception(session: Session, monkeypatch):
+    """process_application should emit failure event when processing fails."""
+    job = Job(url="http://emit-fail.com", company="Unknown", title="Unknown", status="processing", retry_count=0)
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+
+    emitted: list[JobEvent] = []
+
+    async def capture_emit(event: JobEvent):
+        emitted.append(event)
+
+    class FakeScrapeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"text": "job description text"}
+
+    class FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return FakeScrapeResponse()
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(
+        server,
+        "JobParsingAgent",
+        lambda: SimpleNamespace(parse=lambda _: (_ for _ in ()).throw(ValueError("parse failed"))),
+    )
+    monkeypatch.setattr(server.event_bus, "emit", capture_emit)
+    monkeypatch.setattr(server.event_bus, "create_job_queue", AsyncMock(return_value=asyncio.Queue()))
+    cleanup_mock = AsyncMock()
+    monkeypatch.setattr(server.event_bus, "cleanup_job_queue", cleanup_mock)
+
+    await server.process_application(job.id, job.url)
+
+    session.refresh(job)
+    assert job.status == "failed"
+    assert any(event.type == EventType.PIPELINE_FAILED for event in emitted)
+    cleanup_mock.assert_awaited_once_with(job.id)
+
+
+@pytest.mark.asyncio
+async def test_process_application_fails_when_parse_pre_hook_denies(session: Session, monkeypatch):
+    """Parse pre-hook denial should fail pipeline before parser execution."""
+    job = Job(url="http://emit-parse-hook-deny.com", company="Unknown", title="Unknown", status="processing", retry_count=0)
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+
+    emitted: list[JobEvent] = []
+    parser_calls = {"count": 0}
+
+    async def capture_emit(event: JobEvent):
+        emitted.append(event)
+
+    class FakeScrapeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"text": "job description text"}
+
+    class FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return FakeScrapeResponse()
+
+    class DenyParsingHookRunner:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def run_pre_hooks(self, job_id, step, hooks, payload=None):
+            if step == "parsing":
+                return SimpleNamespace(denied=True, message="parse policy blocked", warnings=[])
+            return SimpleNamespace(denied=False, message=None, warnings=[])
+
+        async def run_post_hooks(self, job_id, step, hooks, payload=None):
+            return SimpleNamespace(denied=False, message=None, warnings=[])
+
+    def parse_job(_raw_text):
+        parser_calls["count"] += 1
+        return SimpleNamespace(company_name="Acme", job_title="Software Engineer", key_requirements=["Python"])
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(server, "AgentHookRunner", DenyParsingHookRunner)
+    monkeypatch.setattr(server, "JobParsingAgent", lambda: SimpleNamespace(parse=parse_job))
+    monkeypatch.setattr(server, "load_master_resume", lambda _: "\\begin{document}master\\end{document}")
+    monkeypatch.setattr(
+        server,
+        "ResumeTailorAgent",
+        lambda: SimpleNamespace(tailor=lambda *_: "\\begin{document}tailored\\end{document}"),
+    )
+    compile_pdf_calls = {"count": 0}
+
+    def fake_compile_pdf(**_kwargs):
+        compile_pdf_calls["count"] += 1
+        return "./output/acme.pdf"
+
+    monkeypatch.setattr(server, "compile_pdf", fake_compile_pdf)
+    monkeypatch.setattr(server.event_bus, "emit", capture_emit)
+    monkeypatch.setattr(server.event_bus, "create_job_queue", AsyncMock(return_value=asyncio.Queue()))
+    monkeypatch.setattr(server.event_bus, "cleanup_job_queue", AsyncMock())
+
+    await server.process_application(job.id, job.url)
+
+    session.refresh(job)
+    assert job.status == "failed"
+    assert job.error_message == "Hook failed before parsing: parse policy blocked"
+    assert parser_calls["count"] == 0
+    assert any(event.type == EventType.PIPELINE_FAILED for event in emitted)
+    assert compile_pdf_calls["count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_process_application_retries_tailoring_then_succeeds(session: Session, monkeypatch):
+    """Tailoring failures should retry up to MAX_RETRIES before succeeding."""
+    job = Job(url="http://emit-retry-success.com", company="Unknown", title="Unknown", status="processing", retry_count=0)
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+
+    emitted: list[JobEvent] = []
+
+    async def capture_emit(event: JobEvent):
+        emitted.append(event)
+
+    class FakeScrapeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"text": "job description text"}
+
+    class FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return FakeScrapeResponse()
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(
+        server,
+        "JobParsingAgent",
+        lambda: SimpleNamespace(
+            parse=lambda _: SimpleNamespace(
+                company_name="Acme",
+                job_title="Software Engineer",
+                key_requirements=["Python", "FastAPI"],
+            )
+        ),
+    )
+    monkeypatch.setattr(server, "load_master_resume", lambda _: "\\begin{document}master\\end{document}")
+
+    attempts = {"count": 0}
+
+    def flaky_tailor(*_args):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise RuntimeError("transient tailor failure")
+        return "\\begin{document}tailored\\end{document}"
+
+    monkeypatch.setattr(server, "ResumeTailorAgent", lambda: SimpleNamespace(tailor=flaky_tailor))
+    monkeypatch.setattr(server, "compile_pdf", lambda **_: "./output/acme.pdf")
+    monkeypatch.setattr(server, "MAX_RETRIES", 3)
+    monkeypatch.setattr(server.event_bus, "emit", capture_emit)
+    monkeypatch.setattr(server.event_bus, "create_job_queue", AsyncMock(return_value=asyncio.Queue()))
+    monkeypatch.setattr(server.event_bus, "cleanup_job_queue", AsyncMock())
+
+    await server.process_application(job.id, job.url)
+
+    session.refresh(job)
+    assert job.status == "active"
+    assert job.retry_count == 1
+    assert attempts["count"] == 2
+    assert any(event.type == EventType.RETRY_ATTEMPT for event in emitted)
+
+
+@pytest.mark.asyncio
+async def test_process_application_marks_failed_when_hook_denies_after_retries(session: Session, monkeypatch):
+    """Post-hook denial should exhaust retries and fail the job with explicit message."""
+    job = Job(url="http://emit-hook-deny.com", company="Unknown", title="Unknown", status="processing", retry_count=0)
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+
+    emitted: list[JobEvent] = []
+
+    async def capture_emit(event: JobEvent):
+        emitted.append(event)
+
+    class FakeScrapeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"text": "job description text"}
+
+    class FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return FakeScrapeResponse()
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(
+        server,
+        "JobParsingAgent",
+        lambda: SimpleNamespace(
+            parse=lambda _: SimpleNamespace(
+                company_name="Acme",
+                job_title="Software Engineer",
+                key_requirements=["Python", "FastAPI"],
+            )
+        ),
+    )
+    monkeypatch.setattr(server, "load_master_resume", lambda _: "\\begin{document}master\\end{document}")
+    monkeypatch.setattr(
+        server,
+        "ResumeTailorAgent",
+        lambda: SimpleNamespace(tailor=lambda *_: "```latex\n\\begin{document}bad\\end{document}\n```"),
+    )
+    compile_pdf_mock = AsyncMock()
+    monkeypatch.setattr(server, "compile_pdf", compile_pdf_mock)
+    monkeypatch.setattr(server, "MAX_RETRIES", 2)
+    monkeypatch.setattr(server.event_bus, "emit", capture_emit)
+    monkeypatch.setattr(server.event_bus, "create_job_queue", AsyncMock(return_value=asyncio.Queue()))
+    monkeypatch.setattr(server.event_bus, "cleanup_job_queue", AsyncMock())
+
+    await server.process_application(job.id, job.url)
+
+    session.refresh(job)
+    assert job.status == "failed"
+    assert job.retry_count == 2
+    assert "hook failed" in (job.error_message or "").lower()
+    assert any(event.type == EventType.RETRY_EXHAUSTED for event in emitted)
+    compile_pdf_mock.assert_not_called()

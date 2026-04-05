@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
@@ -17,6 +17,15 @@ from database import create_db_and_tables, get_session, Job, JobSource, JobStage
 from core import JobParsingAgent, ResumeTailorAgent, JobDiscoveryAgent, JobScoringAgent, compile_pdf
 from core.db_sync import reconcile_postgres_and_sqlite
 from core.site_plugins import resolve_job_url
+from core.event_bus import event_bus, EventType, JobEvent
+from core.startup import build_startup_health_runner
+from core.hooks import (
+    AgentHookRunner,
+    LogAgentOutputHook,
+    MasterResumeValidationHook,
+    TailoredLatexObservabilityHook,
+    TailoredLatexValidationHook,
+)
 
 # Configure Logging
 logging.basicConfig(
@@ -36,6 +45,7 @@ def _env_bool(name: str, default: bool) -> bool:
 DB_SYNC_ENABLED = _env_bool("DB_SYNC_ENABLED", True)
 SYNC_ON_BOOT = _env_bool("SYNC_ON_BOOT", True)
 SYNC_ON_SHUTDOWN = _env_bool("SYNC_ON_SHUTDOWN", True)
+startup_health_runner = build_startup_health_runner()
 
 
 async def _run_db_reconcile(phase: str):
@@ -76,10 +86,15 @@ async def _run_db_reconcile(phase: str):
 # Initialize FastAPI
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    app.state.startup_health = startup_health_runner.skipped_report().to_dict()
     if os.getenv("TESTING") != "true":  # Skip in test mode
         create_db_and_tables()
         if SYNC_ON_BOOT:
             await _run_db_reconcile("startup")
+        startup_health_report = await asyncio.to_thread(startup_health_runner.run)
+        app.state.startup_health = startup_health_report.to_dict()
+        if startup_health_runner.fail_fast and startup_health_report.critical_failures:
+            raise RuntimeError(startup_health_report.apply_block_reason or "Startup health checks failed")
     yield
     if SYNC_ON_SHUTDOWN and os.getenv("TESTING") != "true":
         await _run_db_reconcile("shutdown")
@@ -101,6 +116,9 @@ MASTER_RESUME_PATH = os.getenv("MASTER_RESUME_PATH", "./data/master.tex")
 RATE_LIMIT_DELAY = float(os.getenv("RATE_LIMIT_DELAY", "0.2"))  # Seconds between scrapes (reduced for speed)
 MAX_CONCURRENT_SOURCES = int(os.getenv("MAX_CONCURRENT_SOURCES", "5"))  # Max parallel source scans
 MAX_CONCURRENT_JOBS = int(os.getenv("MAX_CONCURRENT_JOBS", "10"))  # Max parallel job scrapes per source
+STREAM_QUEUE_WAIT_TIMEOUT_SECONDS = float(os.getenv("STREAM_QUEUE_WAIT_TIMEOUT_SECONDS", "1.0"))
+STREAM_QUEUE_WAIT_INTERVAL_SECONDS = float(os.getenv("STREAM_QUEUE_WAIT_INTERVAL_SECONDS", "0.05"))
+MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 
 # Global scan status tracking
 scan_status = {
@@ -377,8 +395,33 @@ async def process_application(job_id: int, url: str):
             logger.error(f"Job {job_id} not found in database")
             return
 
+        await event_bus.create_job_queue(job_id)
+        current_step: Optional[str] = None
+        hook_runner = AgentHookRunner(event_bus)
+        pre_parse_hooks = []
+        post_parse_hooks = [LogAgentOutputHook()]
+        pre_tailor_hooks = [MasterResumeValidationHook()]
+        post_tailor_hooks = [TailoredLatexValidationHook(), TailoredLatexObservabilityHook(), LogAgentOutputHook()]
         try:
+            await event_bus.emit(
+                JobEvent(
+                    type=EventType.PIPELINE_STARTED,
+                    timestamp=utcnow(),
+                    job_id=job_id,
+                    data={"status": job.status},
+                )
+            )
+
             # 1. Scrape
+            current_step = "scraping"
+            await event_bus.emit(
+                JobEvent(
+                    type=EventType.STEP_STARTED,
+                    timestamp=utcnow(),
+                    job_id=job_id,
+                    step=current_step,
+                )
+            )
             logger.debug(f"Scraping URL: {url}")
             async with httpx.AsyncClient() as client:
                 response = await client.post(f"{SCRAPER_SERVICE_URL}/scrape", json={"url": url}, timeout=60.0)
@@ -386,11 +429,57 @@ async def process_application(job_id: int, url: str):
                 data = response.json()
                 raw_text = data["text"]
             logger.debug("Scraping completed successfully")
+            await event_bus.emit(
+                JobEvent(
+                    type=EventType.STEP_COMPLETED,
+                    timestamp=utcnow(),
+                    job_id=job_id,
+                    step=current_step,
+                )
+            )
             
             # 2. Parse (run in thread to avoid blocking event loop)
+            current_step = "parsing"
+            await event_bus.emit(
+                JobEvent(
+                    type=EventType.STEP_STARTED,
+                    timestamp=utcnow(),
+                    job_id=job_id,
+                    step=current_step,
+                )
+            )
             logger.debug("Parsing job description")
+            parse_input_summary = {
+                "url": url,
+                "raw_text_length": len(raw_text),
+                "raw_text_preview": raw_text[:200],
+            }
+            pre_hook_summary = await hook_runner.run_pre_hooks(
+                job_id=job_id,
+                step=current_step,
+                hooks=pre_parse_hooks,
+                payload={"input_summary": parse_input_summary},
+            )
+            if pre_hook_summary.denied:
+                raise ValueError(f"Hook failed before parsing: {pre_hook_summary.message}")
+
             parsing_agent = JobParsingAgent()
             job_posting = await asyncio.to_thread(parsing_agent.parse, raw_text)
+            post_hook_summary = await hook_runner.run_post_hooks(
+                job_id=job_id,
+                step=current_step,
+                hooks=post_parse_hooks,
+                payload={
+                    "input_summary": parse_input_summary,
+                    "output_summary": {
+                        "company_name": job_posting.company_name,
+                        "job_title": job_posting.job_title,
+                        "requirements_count": len(job_posting.key_requirements or []),
+                    },
+                },
+            )
+            if post_hook_summary.denied:
+                raise ValueError(f"Hook failed after parsing: {post_hook_summary.message}")
             
             # Update job details
             job.company = job_posting.company_name
@@ -400,14 +489,101 @@ async def process_application(job_id: int, url: str):
             session.add(job)
             session.commit()
             logger.info(f"Job parsed: {job.company} - {job.title}")
+            await event_bus.emit(
+                JobEvent(
+                    type=EventType.STEP_COMPLETED,
+                    timestamp=utcnow(),
+                    job_id=job_id,
+                    step=current_step,
+                    data={"company": job.company, "title": job.title},
+                )
+            )
             
             # 3. Tailor (run in thread to avoid blocking event loop)
+            current_step = "tailoring"
+            await event_bus.emit(
+                JobEvent(
+                    type=EventType.STEP_STARTED,
+                    timestamp=utcnow(),
+                    job_id=job_id,
+                    step=current_step,
+                )
+            )
             logger.debug("Tailoring resume")
             master_latex = load_master_resume(MASTER_RESUME_PATH)
+            pre_hook_summary = await hook_runner.run_pre_hooks(
+                job_id=job_id,
+                step=current_step,
+                hooks=pre_tailor_hooks,
+                payload={"master_latex": master_latex, "url": url},
+            )
+            if pre_hook_summary.denied:
+                raise ValueError(f"Hook failed before tailoring: {pre_hook_summary.message}")
+
             tailor_agent = ResumeTailorAgent()
-            tailored_latex = await asyncio.to_thread(tailor_agent.tailor, master_latex, job_posting)
+            while True:
+                try:
+                    tailored_latex = await asyncio.to_thread(tailor_agent.tailor, master_latex, job_posting)
+                    post_hook_summary = await hook_runner.run_post_hooks(
+                        job_id=job_id,
+                        step=current_step,
+                        hooks=post_tailor_hooks,
+                        payload={
+                            "master_latex": master_latex,
+                            "tailored_latex": tailored_latex,
+                            "url": url,
+                        },
+                    )
+                    if post_hook_summary.denied:
+                        raise ValueError(f"Hook failed after tailoring: {post_hook_summary.message}")
+                    break
+                except Exception as tailoring_error:
+                    if job.retry_count < MAX_RETRIES:
+                        job.retry_count += 1
+                        session.add(job)
+                        session.commit()
+                        await event_bus.emit(
+                            JobEvent(
+                                type=EventType.RETRY_ATTEMPT,
+                                timestamp=utcnow(),
+                                job_id=job_id,
+                                step=current_step,
+                                error=str(tailoring_error),
+                                data={"retry_count": job.retry_count, "max_retries": MAX_RETRIES},
+                            )
+                        )
+                        continue
+
+                    await event_bus.emit(
+                        JobEvent(
+                            type=EventType.RETRY_EXHAUSTED,
+                            timestamp=utcnow(),
+                            job_id=job_id,
+                            step=current_step,
+                            error=str(tailoring_error),
+                            data={"retry_count": job.retry_count, "max_retries": MAX_RETRIES},
+                        )
+                    )
+                    raise
+            await event_bus.emit(
+                JobEvent(
+                    type=EventType.STEP_COMPLETED,
+                    timestamp=utcnow(),
+                    job_id=job_id,
+                    step=current_step,
+                )
+            )
             
             # 4. Compile (run in thread to avoid blocking event loop)
+            current_step = "compiling"
+            await event_bus.emit(
+                JobEvent(
+                    type=EventType.STEP_STARTED,
+                    timestamp=utcnow(),
+                    job_id=job_id,
+                    step=current_step,
+                )
+            )
             logger.debug("Compiling PDF")
             # Sanitize company name and job title for filename
             company_name = "".join(c for c in job_posting.company_name if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_')
@@ -421,20 +597,113 @@ async def process_application(job_id: int, url: str):
                 job_title=job_title,
                 cleanup=True
             )
+            await event_bus.emit(
+                JobEvent(
+                    type=EventType.STEP_COMPLETED,
+                    timestamp=utcnow(),
+                    job_id=job_id,
+                    step=current_step,
+                )
+            )
             
             # 5. Save path
             job.pdf_path = pdf_path
             job.status = "active"
             session.add(job)
             session.commit()
+            await event_bus.emit(
+                JobEvent(
+                    type=EventType.PIPELINE_COMPLETED,
+                    timestamp=utcnow(),
+                    job_id=job_id,
+                    data={"status": job.status, "pdf_path": pdf_path},
+                )
+            )
             logger.info(f"Job {job_id} processing completed successfully. PDF saved at {pdf_path}")
             
         except Exception as e:
             logger.exception(f"Error processing job {job_id}: {e}")
+            if current_step:
+                await event_bus.emit(
+                    JobEvent(
+                        type=EventType.STEP_FAILED,
+                        timestamp=utcnow(),
+                        job_id=job_id,
+                        step=current_step,
+                        error=str(e),
+                    )
+                )
+            await event_bus.emit(
+                JobEvent(
+                    type=EventType.PIPELINE_FAILED,
+                    timestamp=utcnow(),
+                    job_id=job_id,
+                    step=current_step,
+                    error=str(e),
+                )
+            )
             job.status = "failed"
             job.error_message = str(e)
             session.add(job)
             session.commit()
+        finally:
+            await event_bus.cleanup_job_queue(job_id)
+
+
+@app.get("/jobs/{job_id}/stream")
+async def stream_job_events(job_id: int):
+    """Stream job pipeline progress events over SSE."""
+    with Session(engine) as session:
+        job = session.get(Job, job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+    queue = await event_bus.get_job_queue(job_id)
+    if not queue and job.status == "processing":
+        deadline = asyncio.get_running_loop().time() + STREAM_QUEUE_WAIT_TIMEOUT_SECONDS
+        while asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(STREAM_QUEUE_WAIT_INTERVAL_SECONDS)
+            queue = await event_bus.get_job_queue(job_id)
+            if queue:
+                break
+
+    if not queue:
+        if job.status != "processing":
+            raise HTTPException(
+                status_code=409,
+                detail="No active event stream for this job because it is not processing",
+            )
+        raise HTTPException(
+            status_code=409,
+            detail="Job is processing but event stream is not ready yet; retry shortly",
+        )
+
+    terminal_events = {EventType.PIPELINE_COMPLETED, EventType.PIPELINE_FAILED}
+
+    async def event_generator():
+        while True:
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                yield f"event: {event.type.value}\ndata: {json.dumps(event.to_dict())}\n\n"
+                if event.type in terminal_events:
+                    break
+            except asyncio.TimeoutError:
+                keepalive = {
+                    "type": "keepalive",
+                    "timestamp": utcnow().isoformat(),
+                    "job_id": job_id,
+                }
+                yield f"event: keepalive\ndata: {json.dumps(keepalive)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 async def process_single_source(
@@ -769,6 +1038,13 @@ async def process_job_discovery(source_ids: Optional[List[int]] = None):
 @app.post("/apply", response_model=JobResponse)
 async def apply_job(request: ApplyRequest, background_tasks: BackgroundTasks):
     """Start the application process for a job URL."""
+    startup_health = getattr(app.state, "startup_health", {})
+    if startup_health.get("apply_blocked"):
+        raise HTTPException(
+            status_code=503,
+            detail=f"Startup health check enforcement active: {startup_health.get('apply_block_reason', 'critical checks failed')}",
+        )
+
     with Session(engine) as session:
         # Check if job already exists (e.g., from suggestions)
         existing_job = session.exec(
@@ -1156,3 +1432,11 @@ def update_job_stages(job_id: int, request: UpdateJobStagesRequest):
 def get_scan_status():
     """Get the current status of the job discovery scan."""
     return ScanStatusResponse(**scan_status)
+
+
+@app.get("/health")
+def get_health_status():
+    """Get startup health check results."""
+    startup_health = getattr(app.state, "startup_health", startup_health_runner.skipped_report().to_dict())
+    status_code = 503 if startup_health.get("status") == "failed" else 200
+    return JSONResponse(content=startup_health, status_code=status_code)

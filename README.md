@@ -8,6 +8,8 @@ A self-hosted platform that uses AI to discover jobs, score them by relevance, a
 - 📊 **Smart Scoring** - AI-powered relevance scoring (0-100) based on your resume  
 - 🤖 **Resume Tailoring** - Automatically customize your resume for each job
 - 📋 **Application Tracking** - Centralized dashboard for all applications
+- 📡 **Live Pipeline Progress** - Real-time SSE updates while resumes are being tailored
+- 🛡️ **Startup Health & Quality Gates** - Fail-fast startup checks and hook-based validation
 
 ## 🚀 Quick Start
 

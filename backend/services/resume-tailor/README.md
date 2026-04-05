@@ -41,6 +41,7 @@ Get your Gemini API key from: https://makersuite.google.com/app/apikey
 | `/suggestions`         | GET        | List AI-discovered jobs  |
 | `/suggestions/refresh` | POST       | Trigger new job scan     |
 | `/suggestions/status`  | GET        | Get scan progress        |
+| `/health`              | GET        | Startup health check report |
 
 ### Resume Tailoring
 
@@ -49,6 +50,7 @@ Get your Gemini API key from: https://makersuite.google.com/app/apikey
 | `/apply`             | POST   | Start resume tailoring |
 | `/jobs`              | GET    | List all applied jobs  |
 | `/jobs/{id}`         | GET    | Get job details        |
+| `/jobs/{id}/stream`  | GET    | Stream live SSE progress for resume tailoring |
 | `/jobs/{id}/pdf`     | GET    | Download tailored PDF  |
 | `/jobs/{id}/dismiss` | POST   | Dismiss a suggestion   |
 
@@ -59,6 +61,11 @@ Get your Gemini API key from: https://makersuite.google.com/app/apikey
 | `/settings/global-filter` | GET/PUT | Global filter prompt |
 
 See [spec.md](spec.md) for complete API documentation.
+
+### Startup health checks
+
+On service startup, checks run in this order: database connectivity, migrations baseline, master resume presence, Gemini API key, scraper reachability, and pdflatex availability.  
+`STARTUP_FAIL_FAST` controls whether critical failures stop startup; `STARTUP_BLOCK_APPLY_ON_CRITICAL` controls whether `POST /apply` is blocked (503) when critical checks fail.
 
 ## AI Agents
 
@@ -124,6 +131,12 @@ alembic upgrade head
 | `SYNC_ON_SHUTDOWN`      | Reconcile at graceful shutdown when Postgres is reachable | `true`                                                |
 | `SCRAPER_SERVICE_URL`   | Scraper service URL                                       | `http://scraper:8001`                                 |
 | `MASTER_RESUME_PATH`    | Path to LaTeX template                                    | `./data/master.tex`                                   |
+| `MAX_RETRIES`           | Retry attempts for tailoring/hook failures                | `3`                                                   |
+| `STREAM_QUEUE_WAIT_TIMEOUT_SECONDS` | Max wait for active job stream queue         | `1.0`                                                 |
+| `STREAM_QUEUE_WAIT_INTERVAL_SECONDS` | Poll interval while waiting for stream queue   | `0.05`                                                |
+| `STARTUP_FAIL_FAST`     | Stop service startup when critical checks fail            | `true`                                                |
+| `STARTUP_BLOCK_APPLY_ON_CRITICAL` | Return 503 from `/apply` if critical checks failed | `true`                                           |
+| `STARTUP_SCRAPER_TIMEOUT_SECONDS` | Timeout for scraper reachability check         | `5`                                                   |
 
 ### One-time PostgreSQL -> SQLite migration
 
