@@ -624,8 +624,12 @@ async def test_process_application_creates_queue_before_first_emit(session: Sess
             )
         ),
     )
-    monkeypatch.setattr(server, "load_master_resume", lambda _: "master")
-    monkeypatch.setattr(server, "ResumeTailorAgent", lambda: SimpleNamespace(tailor=lambda *_: "tailored"))
+    monkeypatch.setattr(server, "load_master_resume", lambda _: "\\begin{document}master\\end{document}")
+    monkeypatch.setattr(
+        server,
+        "ResumeTailorAgent",
+        lambda: SimpleNamespace(tailor=lambda *_: "\\begin{document}tailored\\end{document}"),
+    )
     monkeypatch.setattr(server, "compile_pdf", lambda **_: "./output/acme.pdf")
     monkeypatch.setattr(server.event_bus, "create_job_queue", create_job_queue)
     monkeypatch.setattr(server.event_bus, "emit", capture_emit)
@@ -679,8 +683,12 @@ async def test_process_application_emits_pipeline_events_on_success(session: Ses
             )
         ),
     )
-    monkeypatch.setattr(server, "load_master_resume", lambda _: "master")
-    monkeypatch.setattr(server, "ResumeTailorAgent", lambda: SimpleNamespace(tailor=lambda *_: "tailored"))
+    monkeypatch.setattr(server, "load_master_resume", lambda _: "\\begin{document}master\\end{document}")
+    monkeypatch.setattr(
+        server,
+        "ResumeTailorAgent",
+        lambda: SimpleNamespace(tailor=lambda *_: "\\begin{document}tailored\\end{document}"),
+    )
     monkeypatch.setattr(server, "compile_pdf", lambda **_: "./output/acme.pdf")
     monkeypatch.setattr(server.event_bus, "emit", capture_emit)
     monkeypatch.setattr(server.event_bus, "create_job_queue", AsyncMock(return_value=asyncio.Queue()))
@@ -744,3 +752,136 @@ async def test_process_application_emits_pipeline_failed_on_exception(session: S
     assert job.status == "failed"
     assert any(event.type == EventType.PIPELINE_FAILED for event in emitted)
     cleanup_mock.assert_awaited_once_with(job.id)
+
+
+@pytest.mark.asyncio
+async def test_process_application_retries_tailoring_then_succeeds(session: Session, monkeypatch):
+    """Tailoring failures should retry up to MAX_RETRIES before succeeding."""
+    job = Job(url="http://emit-retry-success.com", company="Unknown", title="Unknown", status="processing", retry_count=0)
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+
+    emitted: list[JobEvent] = []
+
+    async def capture_emit(event: JobEvent):
+        emitted.append(event)
+
+    class FakeScrapeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"text": "job description text"}
+
+    class FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return FakeScrapeResponse()
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(
+        server,
+        "JobParsingAgent",
+        lambda: SimpleNamespace(
+            parse=lambda _: SimpleNamespace(
+                company_name="Acme",
+                job_title="Software Engineer",
+                key_requirements=["Python", "FastAPI"],
+            )
+        ),
+    )
+    monkeypatch.setattr(server, "load_master_resume", lambda _: "\\begin{document}master\\end{document}")
+
+    attempts = {"count": 0}
+
+    def flaky_tailor(*_args):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise ValueError("transient tailor failure")
+        return "\\begin{document}tailored\\end{document}"
+
+    monkeypatch.setattr(server, "ResumeTailorAgent", lambda: SimpleNamespace(tailor=flaky_tailor))
+    monkeypatch.setattr(server, "compile_pdf", lambda **_: "./output/acme.pdf")
+    monkeypatch.setattr(server, "MAX_RETRIES", 3)
+    monkeypatch.setattr(server.event_bus, "emit", capture_emit)
+    monkeypatch.setattr(server.event_bus, "create_job_queue", AsyncMock(return_value=asyncio.Queue()))
+    monkeypatch.setattr(server.event_bus, "cleanup_job_queue", AsyncMock())
+
+    await server.process_application(job.id, job.url)
+
+    session.refresh(job)
+    assert job.status == "active"
+    assert job.retry_count == 1
+    assert attempts["count"] == 2
+    assert any(event.type == EventType.RETRY_ATTEMPT for event in emitted)
+
+
+@pytest.mark.asyncio
+async def test_process_application_marks_failed_when_hook_denies_after_retries(session: Session, monkeypatch):
+    """Post-hook denial should exhaust retries and fail the job with explicit message."""
+    job = Job(url="http://emit-hook-deny.com", company="Unknown", title="Unknown", status="processing", retry_count=0)
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+
+    emitted: list[JobEvent] = []
+
+    async def capture_emit(event: JobEvent):
+        emitted.append(event)
+
+    class FakeScrapeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"text": "job description text"}
+
+    class FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return FakeScrapeResponse()
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(
+        server,
+        "JobParsingAgent",
+        lambda: SimpleNamespace(
+            parse=lambda _: SimpleNamespace(
+                company_name="Acme",
+                job_title="Software Engineer",
+                key_requirements=["Python", "FastAPI"],
+            )
+        ),
+    )
+    monkeypatch.setattr(server, "load_master_resume", lambda _: "\\begin{document}master\\end{document}")
+    monkeypatch.setattr(
+        server,
+        "ResumeTailorAgent",
+        lambda: SimpleNamespace(tailor=lambda *_: "```latex\n\\begin{document}bad\\end{document}\n```"),
+    )
+    compile_pdf_mock = AsyncMock()
+    monkeypatch.setattr(server, "compile_pdf", compile_pdf_mock)
+    monkeypatch.setattr(server, "MAX_RETRIES", 2)
+    monkeypatch.setattr(server.event_bus, "emit", capture_emit)
+    monkeypatch.setattr(server.event_bus, "create_job_queue", AsyncMock(return_value=asyncio.Queue()))
+    monkeypatch.setattr(server.event_bus, "cleanup_job_queue", AsyncMock())
+
+    await server.process_application(job.id, job.url)
+
+    session.refresh(job)
+    assert job.status == "failed"
+    assert job.retry_count == 2
+    assert "hook denied" in (job.error_message or "").lower()
+    assert any(event.type == EventType.RETRY_EXHAUSTED for event in emitted)
+    compile_pdf_mock.assert_not_called()

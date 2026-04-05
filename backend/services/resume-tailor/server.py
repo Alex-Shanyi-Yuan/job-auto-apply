@@ -18,6 +18,12 @@ from core import JobParsingAgent, ResumeTailorAgent, JobDiscoveryAgent, JobScori
 from core.db_sync import reconcile_postgres_and_sqlite
 from core.site_plugins import resolve_job_url
 from core.event_bus import event_bus, EventType, JobEvent
+from core.hooks import (
+    AgentHookRunner,
+    MasterResumeValidationHook,
+    TailoredLatexObservabilityHook,
+    TailoredLatexValidationHook,
+)
 
 # Configure Logging
 logging.basicConfig(
@@ -104,6 +110,7 @@ MAX_CONCURRENT_SOURCES = int(os.getenv("MAX_CONCURRENT_SOURCES", "5"))  # Max pa
 MAX_CONCURRENT_JOBS = int(os.getenv("MAX_CONCURRENT_JOBS", "10"))  # Max parallel job scrapes per source
 STREAM_QUEUE_WAIT_TIMEOUT_SECONDS = float(os.getenv("STREAM_QUEUE_WAIT_TIMEOUT_SECONDS", "1.0"))
 STREAM_QUEUE_WAIT_INTERVAL_SECONDS = float(os.getenv("STREAM_QUEUE_WAIT_INTERVAL_SECONDS", "0.05"))
+MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 
 # Global scan status tracking
 scan_status = {
@@ -382,6 +389,9 @@ async def process_application(job_id: int, url: str):
 
         await event_bus.create_job_queue(job_id)
         current_step: Optional[str] = None
+        hook_runner = AgentHookRunner(event_bus)
+        pre_tailor_hooks = [MasterResumeValidationHook()]
+        post_tailor_hooks = [TailoredLatexValidationHook(), TailoredLatexObservabilityHook()]
         try:
             await event_bus.emit(
                 JobEvent(
@@ -462,8 +472,60 @@ async def process_application(job_id: int, url: str):
             )
             logger.debug("Tailoring resume")
             master_latex = load_master_resume(MASTER_RESUME_PATH)
+            pre_hook_summary = await hook_runner.run_pre_hooks(
+                job_id=job_id,
+                step=current_step,
+                hooks=pre_tailor_hooks,
+                payload={"master_latex": master_latex, "url": url},
+            )
+            if pre_hook_summary.denied:
+                raise ValueError(f"Hook denied before tailoring: {pre_hook_summary.message}")
+
             tailor_agent = ResumeTailorAgent()
-            tailored_latex = await asyncio.to_thread(tailor_agent.tailor, master_latex, job_posting)
+            while True:
+                try:
+                    tailored_latex = await asyncio.to_thread(tailor_agent.tailor, master_latex, job_posting)
+                    post_hook_summary = await hook_runner.run_post_hooks(
+                        job_id=job_id,
+                        step=current_step,
+                        hooks=post_tailor_hooks,
+                        payload={
+                            "master_latex": master_latex,
+                            "tailored_latex": tailored_latex,
+                            "url": url,
+                        },
+                    )
+                    if post_hook_summary.denied:
+                        raise ValueError(f"Hook denied after tailoring: {post_hook_summary.message}")
+                    break
+                except Exception as tailoring_error:
+                    if job.retry_count < MAX_RETRIES:
+                        job.retry_count += 1
+                        session.add(job)
+                        session.commit()
+                        await event_bus.emit(
+                            JobEvent(
+                                type=EventType.RETRY_ATTEMPT,
+                                timestamp=utcnow(),
+                                job_id=job_id,
+                                step=current_step,
+                                error=str(tailoring_error),
+                                data={"retry_count": job.retry_count, "max_retries": MAX_RETRIES},
+                            )
+                        )
+                        continue
+
+                    await event_bus.emit(
+                        JobEvent(
+                            type=EventType.RETRY_EXHAUSTED,
+                            timestamp=utcnow(),
+                            job_id=job_id,
+                            step=current_step,
+                            error=str(tailoring_error),
+                            data={"retry_count": job.retry_count, "max_retries": MAX_RETRIES},
+                        )
+                    )
+                    raise
             await event_bus.emit(
                 JobEvent(
                     type=EventType.STEP_COMPLETED,
