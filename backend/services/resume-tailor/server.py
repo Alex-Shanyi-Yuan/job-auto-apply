@@ -758,14 +758,42 @@ def list_jobs():
         return [job_to_response(job) for job in jobs]
 
 
-@app.get("/jobs/{job_id}", response_model=JobResponse)
+@app.get("/jobs/{job_id}")
 def get_job(job_id: int):
-    """Get a specific job by ID."""
+    """Get details for a specific job, including stages."""
     with Session(engine) as session:
-        job = session.get(Job, job_id)
+        job = session.exec(select(Job).where(Job.id == job_id)).first()
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
-        return job_to_response(job)
+        # Get all completed stages for this job
+        stages = session.exec(
+            select(JobStage).where(
+                JobStage.job_id == job_id,
+                JobStage.completed_at.isnot(None)
+            )
+        ).all()
+        return {
+            "id": job.id,
+            "url": job.url,
+            "company": job.company,
+            "title": job.title,
+            "status": job.status,
+            "score": job.score,
+            "requirements": json.loads(job.requirements) if job.requirements else None,
+            "error_message": job.error_message,
+            "pdf_path": job.pdf_path,
+            "stages": [
+                {
+                    "stage_name": s.stage_name,
+                    "completed_at": s.completed_at.isoformat() if s.completed_at else None,
+                    "notes": s.notes
+                }
+                for s in stages
+            ],
+            "rejection_stage": job.rejection_stage,
+            "rejection_reason": job.rejection_reason,
+            "created_at": job.created_at.isoformat(),
+        }
 
 
 @app.get("/jobs/{job_id}/pdf")

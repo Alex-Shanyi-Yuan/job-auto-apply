@@ -73,6 +73,30 @@ def test_update_job_stages_creates_new_stages(session: Session, client: TestClie
     assert stages[0].stage_name == "applied"
     assert stages[0].completed_at is not None
 
+def test_get_job_includes_stages(session: Session, client: TestClient):
+    """Test GET /jobs/{id} includes stages in response."""
+    # Create job with stages
+    job = Job(url="http://test.com", company="TestCo", title="SWE", status="active", retry_count=0)
+    session.add(job)
+    session.commit()
+    
+    stage1 = JobStage(job_id=job.id, stage_name="applied", completed_at=utcnow(), notes="Applied online")
+    stage2 = JobStage(job_id=job.id, stage_name="oa", completed_at=utcnow())
+    session.add(stage1)
+    session.add(stage2)
+    session.commit()
+    
+    # Get job via API
+    response = client.get(f"/jobs/{job.id}")
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert "stages" in data
+    assert len(data["stages"]) == 2
+    assert data["stages"][0]["stage_name"] == "applied"
+    assert data["stages"][0]["notes"] == "Applied online"
+    assert data["stages"][1]["stage_name"] == "oa"
+
 
 def test_update_job_stages_unchecks_existing_stage(session: Session, client: TestClient):
     """Test unchecking a previously completed stage."""
