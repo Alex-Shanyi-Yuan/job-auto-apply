@@ -12,7 +12,7 @@ from pathlib import Path
 from sqlmodel import Session, select
 from contextlib import asynccontextmanager
 
-from database import create_db_and_tables, get_session, Job, JobSource, Settings, engine, utcnow
+from database import create_db_and_tables, get_session, Job, JobSource, JobStage, Settings, engine, utcnow
 from core import JobParsingAgent, ResumeTailorAgent, JobDiscoveryAgent, JobScoringAgent, compile_pdf
 from core.db_sync import reconcile_postgres_and_sqlite
 from core.site_plugins import resolve_job_url
@@ -207,6 +207,37 @@ class GlobalFilterResponse(BaseModel):
 
 class GlobalFilterUpdate(BaseModel):
     filter_prompt: str
+
+
+class StageUpdate(BaseModel):
+    name: str  # 'applied' | 'oa' | 'interview' | 'offer'
+    completed: bool
+    notes: Optional[str] = None
+
+
+class UpdateJobStagesRequest(BaseModel):
+    stages: list[StageUpdate]
+    rejection_stage: Optional[str] = None
+    rejection_reason: Optional[str] = None
+
+
+class JobStageResponse(BaseModel):
+    stage_name: str
+    completed_at: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class JobWithStagesResponse(BaseModel):
+    id: int
+    url: str
+    company: str
+    title: str
+    status: str
+    score: Optional[int] = None
+    stages: list[JobStageResponse]
+    rejection_stage: Optional[str] = None
+    rejection_reason: Optional[str] = None
+    created_at: str
 
 
 # === Helper Functions ===
@@ -879,6 +910,90 @@ def dismiss_job(job_id: int):
         session.commit()
         session.refresh(job)
         return job_to_response(job)
+
+
+@app.put("/jobs/{job_id}/stages", response_model=JobWithStagesResponse)
+def update_job_stages(job_id: int, request: UpdateJobStagesRequest):
+    """Update interview stages for a job."""
+    with Session(engine) as session:
+        # Get job
+        job = session.exec(select(Job).where(Job.id == job_id)).first()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        
+        # Update each stage
+        for stage_update in request.stages:
+            # Get or create stage
+            stage = session.exec(
+                select(JobStage).where(
+                    JobStage.job_id == job_id,
+                    JobStage.stage_name == stage_update.name
+                )
+            ).first()
+            
+            if stage_update.completed:
+                # Mark as completed
+                if not stage:
+                    stage = JobStage(
+                        job_id=job_id,
+                        stage_name=stage_update.name,
+                        completed_at=utcnow(),
+                        notes=stage_update.notes
+                    )
+                    session.add(stage)
+                else:
+                    if stage.completed_at is None:
+                        stage.completed_at = utcnow()
+                    if stage_update.notes:
+                        stage.notes = stage_update.notes
+            else:
+                # Mark as not completed
+                if stage:
+                    stage.completed_at = None
+        
+        # Update rejection info
+        if request.rejection_stage:
+            job.status = "rejected"
+            job.rejection_stage = request.rejection_stage
+            job.rejection_reason = request.rejection_reason
+        else:
+            # Update status to active if any stages exist
+            has_stages = session.exec(
+                select(JobStage).where(JobStage.job_id == job_id)
+            ).first()
+            if has_stages:
+                job.status = "active"
+        
+        session.commit()
+        session.refresh(job)
+        
+        # Get all completed stages
+        completed_stages = session.exec(
+            select(JobStage).where(
+                JobStage.job_id == job_id,
+                JobStage.completed_at.isnot(None)
+            )
+        ).all()
+        
+        return JobWithStagesResponse(
+            id=job.id,
+            url=job.url,
+            company=job.company,
+            title=job.title,
+            status=job.status,
+            score=job.score,
+            stages=[
+                JobStageResponse(
+                    stage_name=s.stage_name,
+                    completed_at=s.completed_at.isoformat() if s.completed_at else None,
+                    notes=s.notes
+                )
+                for s in completed_stages
+            ],
+            rejection_stage=job.rejection_stage,
+            rejection_reason=job.rejection_reason,
+            created_at=job.created_at.isoformat()
+        )
 
 
 @app.get("/suggestions/status", response_model=ScanStatusResponse)
