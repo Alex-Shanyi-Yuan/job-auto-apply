@@ -766,14 +766,35 @@ async def apply_job(request: ApplyRequest, background_tasks: BackgroundTasks):
 
 @app.get("/jobs", response_model=List[JobResponse])
 def list_jobs():
-    """List all jobs (excluding suggested/dismissed)."""
+    """Get all jobs (excludes suggested and dismissed jobs)."""
     with Session(engine) as session:
         jobs = session.exec(
             select(Job)
             .where(Job.status.not_in(["suggested", "dismissed"]))
             .order_by(Job.created_at.desc())
         ).all()
-        return [job_to_response(job) for job in jobs]
+        result = []
+        for job in jobs:
+            # Get stages for this job
+            stages = session.exec(
+                select(JobStage).where(
+                    JobStage.job_id == job.id,
+                    JobStage.completed_at.isnot(None)
+                ).order_by(JobStage.completed_at)
+            ).all()
+            job_dict = job_to_response(job).__dict__
+            job_dict["stages"] = [
+                {
+                    "stage_name": s.stage_name,
+                    "completed_at": s.completed_at.isoformat() if s.completed_at else None,
+                    "notes": s.notes
+                }
+                for s in stages
+            ]
+            job_dict["rejection_stage"] = job.rejection_stage
+            job_dict["rejection_reason"] = job.rejection_reason
+            result.append(job_dict)
+        return result
 
 
 @app.get("/jobs/{job_id}", response_model=JobDetailResponse)

@@ -6,6 +6,32 @@ from sqlmodel.pool import StaticPool
 from database import SQLModel, Job, JobStage, utcnow, get_session
 from server import app
 
+def test_get_jobs_includes_stages(session: Session, client: TestClient):
+    """Test GET /jobs includes stages for all jobs."""
+    # Create two jobs with stages
+    job1 = Job(url="http://test1.com", company="Co1", title="SWE1", status="active", retry_count=0)
+    job2 = Job(url="http://test2.com", company="Co2", title="SWE2", status="active", retry_count=0)
+    session.add(job1)
+    session.add(job2)
+    session.commit()
+    
+    stage1 = JobStage(job_id=job1.id, stage_name="applied", completed_at=utcnow())
+    stage2 = JobStage(job_id=job2.id, stage_name="applied", completed_at=utcnow())
+    stage3 = JobStage(job_id=job2.id, stage_name="oa", completed_at=utcnow())
+    session.add_all([stage1, stage2, stage3])
+    session.commit()
+    
+    # Get all jobs
+    response = client.get("/jobs")
+    
+    assert response.status_code == 200
+    jobs = response.json()
+    assert len(jobs) == 2
+    
+    # Find job2 (has 2 stages)
+    job2_data = next(j for j in jobs if j["id"] == job2.id)
+    assert len(job2_data["stages"]) == 2
+    assert job2_data["stages"][0]["stage_name"] in ["applied", "oa"]
 
 @pytest.fixture(name="session")
 def session_fixture(monkeypatch):
