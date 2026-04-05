@@ -3,6 +3,8 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 export type JobStatus =
   | "suggested"
   | "active"
+  | "offer"
+  | "turndown"
   | "processing"
   | "rejected"
   | "dismissed"
@@ -43,6 +45,7 @@ export interface UpdateJobStagesPayload {
   stages: StageUpdate[];
   rejection_stage?: StageName | null;
   rejection_reason?: string | null;
+  status_override?: "active" | "rejected" | "turndown";
 }
 
 export interface JobWithStagesResponse {

@@ -289,6 +289,119 @@ def test_update_job_stages_without_rejection_field_preserves_existing_rejection(
     assert data["rejection_reason"] == "Failed OA"
 
 
+def test_update_job_stages_sets_offer_status_when_offer_completed(session: Session, client: TestClient):
+    """Completing offer stage should move job status to offer."""
+    job = Job(
+        url="http://test-offer.com",
+        company="TestCo",
+        title="SWE",
+        status="active",
+        retry_count=0,
+    )
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+
+    response = client.put(f"/jobs/{job.id}/stages", json={
+        "stages": [
+            {"name": "applied", "completed": True},
+            {"name": "oa", "completed": False},
+            {"name": "interview", "completed": False},
+            {"name": "offer", "completed": True},
+        ]
+    })
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "offer"
+
+
+def test_update_job_stages_unchecking_offer_returns_to_active(session: Session, client: TestClient):
+    """Unchecking offer stage should return status to active when other completed stages remain."""
+    job = Job(
+        url="http://test-offer-uncheck.com",
+        company="TestCo",
+        title="SWE",
+        status="offer",
+        retry_count=0,
+    )
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+
+    session.add(JobStage(job_id=job.id, stage_name="applied", completed_at=utcnow()))
+    session.add(JobStage(job_id=job.id, stage_name="offer", completed_at=utcnow()))
+    session.commit()
+
+    response = client.put(f"/jobs/{job.id}/stages", json={
+        "stages": [
+            {"name": "applied", "completed": True},
+            {"name": "oa", "completed": False},
+            {"name": "interview", "completed": False},
+            {"name": "offer", "completed": False},
+        ]
+    })
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "active"
+
+
+def test_update_job_stages_status_override_sets_turndown(session: Session, client: TestClient):
+    """status_override should allow toggling to turndown."""
+    job = Job(
+        url="http://test-turndown.com",
+        company="TestCo",
+        title="SWE",
+        status="active",
+        retry_count=0,
+    )
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+
+    response = client.put(f"/jobs/{job.id}/stages", json={
+        "stages": [{"name": "applied", "completed": True}],
+        "status_override": "turndown",
+    })
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "turndown"
+
+
+def test_update_job_stages_status_override_rejected_sets_rejection_stage(session: Session, client: TestClient):
+    """status_override rejected should set rejection_stage to latest completed stage when missing."""
+    job = Job(
+        url="http://test-status-rejected.com",
+        company="TestCo",
+        title="SWE",
+        status="active",
+        retry_count=0,
+    )
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+    session.add(JobStage(job_id=job.id, stage_name="applied", completed_at=utcnow()))
+    session.add(JobStage(job_id=job.id, stage_name="oa", completed_at=utcnow()))
+    session.commit()
+
+    response = client.put(f"/jobs/{job.id}/stages", json={
+        "stages": [
+            {"name": "applied", "completed": True},
+            {"name": "oa", "completed": True},
+            {"name": "interview", "completed": False},
+            {"name": "offer", "completed": False},
+        ],
+        "status_override": "rejected",
+    })
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "rejected"
+    assert data["rejection_stage"] == "oa"
+
+
 def test_apply_creates_initial_applied_stage(session: Session, client: TestClient, monkeypatch):
     """Test POST /apply creates initial applied stage immediately."""
     async def mock_process_application(job_id: int, url: str):

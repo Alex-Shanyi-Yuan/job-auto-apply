@@ -1,11 +1,9 @@
 'use client';
 
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { getJobs, Job } from '@/lib/api';
+import { getJobs, Job, JobWithStagesResponse, StageName, updateJobStages } from '@/lib/api';
 import { Button } from '@/components/ui/button';
-import { StageProgress } from '@/components/ui/stage-progress';
-import { JobStageEditor } from '@/components/ui/job-stage-editor';
 import {
   Table,
   TableBody,
@@ -18,11 +16,36 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { PlusCircle, ExternalLink, FileText, ChevronDown, ChevronRight } from 'lucide-react';
 
+const STAGE_ORDER = ['applied', 'oa', 'interview', 'offer'] as const satisfies readonly StageName[];
+const STAGE_LABELS: Record<StageName, string> = {
+  applied: 'Applied',
+  oa: 'OA',
+  interview: 'Interview',
+  offer: 'Offer',
+};
+
+function mergeJobUpdate(previous: Job, response: JobWithStagesResponse): Job {
+  return {
+    ...previous,
+    id: response.id,
+    url: response.url,
+    company: response.company,
+    title: response.title,
+    status: response.status,
+    score: response.score,
+    stages: response.stages,
+    rejection_stage: response.rejection_stage ?? null,
+    rejection_reason: response.rejection_reason ?? null,
+    created_at: response.created_at,
+    updated_at: response.updated_at,
+  };
+}
+
 export default function DashboardPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [showOlderJobs, setShowOlderJobs] = useState(false);
-  const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
+  const [updatingJobIds, setUpdatingJobIds] = useState<Set<number>>(new Set());
   const isFetchingRef = useRef(false);
 
   useEffect(() => {
@@ -76,10 +99,14 @@ export default function DashboardPage() {
     switch (status) {
       case 'active':
         return <Badge variant="default">Active</Badge>;
+      case 'offer':
+        return <Badge className="bg-green-600 hover:bg-green-700">Offer</Badge>;
       case 'processing':
         return <Badge variant="secondary">Processing</Badge>;
       case 'rejected':
         return <Badge variant="destructive">Rejected</Badge>;
+      case 'turndown':
+        return <Badge variant="outline">TurnDown</Badge>;
       case 'dismissed':
         return <Badge variant="outline">Dismissed</Badge>;
       case 'failed':
@@ -89,84 +116,175 @@ export default function DashboardPage() {
     }
   };
 
-  const toggleRowExpansion = (jobId: number) => {
-    setExpandedRows((previous) => {
-      const next = new Set(previous);
-      if (next.has(jobId)) {
-        next.delete(jobId);
-      } else {
-        next.add(jobId);
+  const latestCompletedStage = (completed: Set<StageName>): StageName => {
+    for (let i = STAGE_ORDER.length - 1; i >= 0; i -= 1) {
+      const stage = STAGE_ORDER[i];
+      if (completed.has(stage)) {
+        return stage;
       }
-      return next;
-    });
+    }
+    return 'applied';
   };
 
-  const handleJobUpdate = (updatedJob: Job) => {
-    setJobs((previous) =>
-      previous.map((job) => (job.id === updatedJob.id ? updatedJob : job))
+  const stageSetForJob = (job: Job) =>
+    new Set((job.stages ?? []).filter((stage) => stage.completed_at).map((stage) => stage.stage_name));
+
+  const noteMapForJob = (job: Job) =>
+    new Map((job.stages ?? []).map((stage) => [stage.stage_name, stage.notes ?? null] as const));
+
+  const handleToggleStage = async (job: Job, stageName: StageName) => {
+    if (updatingJobIds.has(job.id)) {
+      return;
+    }
+
+    const completed = stageSetForJob(job);
+    const notes = noteMapForJob(job);
+    const currentlyCompleted = completed.has(stageName);
+    const nextCompleted = !currentlyCompleted;
+
+    setUpdatingJobIds((previous) => new Set(previous).add(job.id));
+    try {
+      const response = await updateJobStages(job.id, {
+        stages: STAGE_ORDER.map((stage) => ({
+          name: stage,
+          completed: stage === stageName ? nextCompleted : completed.has(stage),
+          notes: notes.get(stage) ?? null,
+        })),
+      });
+      setJobs((previous) =>
+        previous.map((candidate) =>
+          candidate.id === job.id ? mergeJobUpdate(candidate, response) : candidate
+        )
+      );
+    } catch (error) {
+      console.error('Failed to toggle stage', error);
+    } finally {
+      setUpdatingJobIds((previous) => {
+        const next = new Set(previous);
+        next.delete(job.id);
+        return next;
+      });
+    }
+  };
+
+  const handleToggleStatus = async (job: Job) => {
+    if (updatingJobIds.has(job.id)) {
+      return;
+    }
+    if (job.status !== 'active' && job.status !== 'rejected' && job.status !== 'turndown') {
+      return;
+    }
+
+    const completed = stageSetForJob(job);
+    const notes = noteMapForJob(job);
+    const nextStatus =
+      job.status === 'active'
+        ? 'rejected'
+        : job.status === 'rejected'
+          ? 'turndown'
+          : 'active';
+
+    setUpdatingJobIds((previous) => new Set(previous).add(job.id));
+    try {
+      const response = await updateJobStages(job.id, {
+        stages: STAGE_ORDER.map((stage) => ({
+          name: stage,
+          completed: completed.has(stage),
+          notes: notes.get(stage) ?? null,
+        })),
+        rejection_stage: nextStatus === 'rejected' ? latestCompletedStage(completed) : null,
+        rejection_reason: nextStatus === 'rejected' ? (job.rejection_reason ?? null) : null,
+        status_override: nextStatus,
+      });
+      setJobs((previous) =>
+        previous.map((candidate) =>
+          candidate.id === job.id ? mergeJobUpdate(candidate, response) : candidate
+        )
+      );
+    } catch (error) {
+      console.error('Failed to toggle status', error);
+    } finally {
+      setUpdatingJobIds((previous) => {
+        const next = new Set(previous);
+        next.delete(job.id);
+        return next;
+      });
+    }
+  };
+
+  const renderStageButtons = (job: Job) => {
+    const completed = stageSetForJob(job);
+    const isUpdating = updatingJobIds.has(job.id);
+
+    return (
+      <div className="flex flex-wrap items-center gap-1">
+        {STAGE_ORDER.map((stage) => {
+          const isCompleted = completed.has(stage);
+          return (
+            <Button
+              key={stage}
+              type="button"
+              size="sm"
+              variant={isCompleted ? 'default' : 'outline'}
+              className="h-7 px-2 text-xs"
+              disabled={isUpdating}
+              onClick={() => handleToggleStage(job, stage)}
+              title={`${STAGE_LABELS[stage]}: ${isCompleted ? 'on' : 'off'}`}
+            >
+              {STAGE_LABELS[stage]}
+            </Button>
+          );
+        })}
+      </div>
     );
   };
 
-  const renderJobRows = (job: Job) => {
-    const isExpanded = expandedRows.has(job.id);
-    const detailsRowId = `job-stage-editor-${job.id}`;
-
+  const renderJobRow = (job: Job) => {
+    const isUpdating = updatingJobIds.has(job.id);
+    const isToggleableStatus = job.status === 'active' || job.status === 'rejected' || job.status === 'turndown';
     return (
-      <Fragment key={job.id}>
-        <TableRow>
-          <TableCell>
+      <TableRow key={job.id}>
+        <TableCell>
+          {new Date(job.created_at).toLocaleDateString()}
+        </TableCell>
+        <TableCell className="font-medium">{job.company}</TableCell>
+        <TableCell>{job.title}</TableCell>
+        <TableCell>
+          {isToggleableStatus ? (
             <Button
               type="button"
               variant="ghost"
-              size="icon"
-              title={isExpanded ? 'Collapse row' : 'Expand row'}
-              aria-expanded={isExpanded}
-              aria-controls={detailsRowId}
-              onClick={() => toggleRowExpansion(job.id)}
+              className="h-auto p-0"
+              disabled={isUpdating}
+              onClick={() => handleToggleStatus(job)}
+              title="Toggle Active/Rejected/TurnDown"
             >
-              {isExpanded ? (
-                <ChevronDown className="h-4 w-4" />
-              ) : (
-                <ChevronRight className="h-4 w-4" />
-              )}
+              {getStatusBadge(job.status)}
             </Button>
-          </TableCell>
-          <TableCell>
-            {new Date(job.created_at).toLocaleDateString()}
-          </TableCell>
-          <TableCell className="font-medium">{job.company}</TableCell>
-          <TableCell>{job.title}</TableCell>
-          <TableCell>{getStatusBadge(job.status)}</TableCell>
-          <TableCell>
-            <StageProgress stages={job.stages} />
-          </TableCell>
-          <TableCell className="text-right">
-            <div className="flex justify-end gap-2">
-              <Button asChild variant="ghost" size="icon" title="View Details">
-                <Link href={`/jobs/${job.id}`}>
-                  <FileText className="h-4 w-4" />
-                </Link>
-              </Button>
-              <Button asChild variant="ghost" size="icon" title="View Original Posting">
-                <a
-                  href={job.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  <ExternalLink className="h-4 w-4" />
-                </a>
-              </Button>
-            </div>
-          </TableCell>
-        </TableRow>
-        {isExpanded && (
-          <TableRow id={detailsRowId}>
-            <TableCell colSpan={7} className="bg-muted/20">
-              <JobStageEditor job={job} onUpdate={handleJobUpdate} />
-            </TableCell>
-          </TableRow>
-        )}
-      </Fragment>
+          ) : (
+            getStatusBadge(job.status)
+          )}
+        </TableCell>
+        <TableCell>{renderStageButtons(job)}</TableCell>
+        <TableCell className="text-right">
+          <div className="flex justify-end gap-2">
+            <Button asChild variant="ghost" size="icon" title="View Details">
+              <Link href={`/jobs/${job.id}`}>
+                <FileText className="h-4 w-4" />
+              </Link>
+            </Button>
+            <Button asChild variant="ghost" size="icon" title="View Original Posting">
+              <a
+                href={job.url}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <ExternalLink className="h-4 w-4" />
+              </a>
+            </Button>
+          </div>
+        </TableCell>
+      </TableRow>
     );
   };
 
@@ -201,7 +319,6 @@ export default function DashboardPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-12" />
                   <TableHead>Date</TableHead>
                   <TableHead>Company</TableHead>
                   <TableHead>Role</TableHead>
@@ -211,7 +328,7 @@ export default function DashboardPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {todayJobs.map(renderJobRows)}
+                {todayJobs.map(renderJobRow)}
               </TableBody>
             </Table>
           )}
@@ -249,7 +366,6 @@ export default function DashboardPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-12" />
                     <TableHead>Date</TableHead>
                     <TableHead>Company</TableHead>
                     <TableHead>Role</TableHead>
@@ -259,7 +375,7 @@ export default function DashboardPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {olderJobs.map(renderJobRows)}
+                  {olderJobs.map(renderJobRow)}
                 </TableBody>
               </Table>
             </CardContent>

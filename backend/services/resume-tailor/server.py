@@ -224,10 +224,17 @@ class StageUpdate(BaseModel):
     notes: Optional[str] = None
 
 
+class StatusOverride(str, Enum):
+    ACTIVE = "active"
+    REJECTED = "rejected"
+    TURNDOWN = "turndown"
+
+
 class UpdateJobStagesRequest(BaseModel):
     stages: list[StageUpdate]
     rejection_stage: Optional[StageName] = None
     rejection_reason: Optional[str] = None
+    status_override: Optional[StatusOverride] = None
 
 
 class JobStageResponse(BaseModel):
@@ -1076,6 +1083,16 @@ def update_job_stages(job_id: int, request: UpdateJobStagesRequest):
                     stage.completed_at = None
                     stage.updated_at = utcnow()
         
+        completed_stages = session.exec(
+            select(JobStage).where(
+                JobStage.job_id == job_id,
+                JobStage.completed_at.isnot(None)
+            ).order_by(JobStage.completed_at)
+        ).all()
+        has_completed_stages = len(completed_stages) > 0
+        has_offer_stage = any(stage.stage_name == StageName.OFFER.value for stage in completed_stages)
+        latest_completed_stage = completed_stages[-1].stage_name if completed_stages else StageName.APPLIED.value
+
         # Update rejection info
         if "rejection_stage" in request.model_fields_set and request.rejection_stage:
             job.status = "rejected"
@@ -1086,29 +1103,32 @@ def update_job_stages(job_id: int, request: UpdateJobStagesRequest):
             # Explicitly clear rejection details when rejection_stage is set to null.
             job.rejection_stage = None
             job.rejection_reason = None
-            job.status = "active"
+            if has_offer_stage:
+                job.status = "offer"
+            else:
+                job.status = "active"
             job.updated_at = utcnow()
         else:
-            # Update status to active if any completed stages exist
-            has_completed_stages = session.exec(
-                select(JobStage).where(
-                    JobStage.job_id == job_id,
-                    JobStage.completed_at.isnot(None)
-                )
-            ).first()
             if has_completed_stages and not job.rejection_stage:
-                job.status = "active"
+                job.status = "offer" if has_offer_stage else "active"
+
+        if request.status_override:
+            if request.status_override == StatusOverride.TURNDOWN:
+                job.status = "turndown"
+                job.rejection_stage = None
+                job.rejection_reason = None
+            elif request.status_override == StatusOverride.REJECTED:
+                job.status = "rejected"
+                if not job.rejection_stage:
+                    job.rejection_stage = StageName(latest_completed_stage)
+            elif request.status_override == StatusOverride.ACTIVE:
+                job.status = "offer" if has_offer_stage else "active"
+                job.rejection_stage = None
+                job.rejection_reason = None
+            job.updated_at = utcnow()
         
         session.commit()
         session.refresh(job)
-        
-        # Get all completed stages
-        completed_stages = session.exec(
-            select(JobStage).where(
-                JobStage.job_id == job_id,
-                JobStage.completed_at.isnot(None)
-            ).order_by(JobStage.completed_at)
-        ).all()
         
         return JobWithStagesResponse(
             id=job.id,
