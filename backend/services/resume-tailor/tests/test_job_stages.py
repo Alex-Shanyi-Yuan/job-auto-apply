@@ -8,8 +8,9 @@ from server import app
 
 
 @pytest.fixture(name="session")
-def session_fixture():
+def session_fixture(monkeypatch):
     """Create a fresh in-memory database for each test."""
+    monkeypatch.setenv("TESTING", "true")  # Set test mode
     engine = create_engine(
         "sqlite:///:memory:",
         connect_args={"check_same_thread": False},

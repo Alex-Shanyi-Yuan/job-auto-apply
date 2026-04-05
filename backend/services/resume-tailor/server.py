@@ -76,11 +76,12 @@ async def _run_db_reconcile(phase: str):
 # Initialize FastAPI
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    create_db_and_tables()
-    if SYNC_ON_BOOT:
-        await _run_db_reconcile("startup")
+    if os.getenv("TESTING") != "true":  # Skip in test mode
+        create_db_and_tables()
+        if SYNC_ON_BOOT:
+            await _run_db_reconcile("startup")
     yield
-    if SYNC_ON_SHUTDOWN:
+    if SYNC_ON_SHUTDOWN and os.getenv("TESTING") != "true":
         await _run_db_reconcile("shutdown")
 
 app = FastAPI(lifespan=lifespan)
