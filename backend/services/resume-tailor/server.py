@@ -390,6 +390,8 @@ async def process_application(job_id: int, url: str):
         await event_bus.create_job_queue(job_id)
         current_step: Optional[str] = None
         hook_runner = AgentHookRunner(event_bus)
+        pre_parse_hooks = []
+        post_parse_hooks = []
         pre_tailor_hooks = [MasterResumeValidationHook()]
         post_tailor_hooks = [TailoredLatexValidationHook(), TailoredLatexObservabilityHook()]
         try:
@@ -439,8 +441,37 @@ async def process_application(job_id: int, url: str):
                 )
             )
             logger.debug("Parsing job description")
+            parse_input_summary = {
+                "url": url,
+                "raw_text_length": len(raw_text),
+                "raw_text_preview": raw_text[:200],
+            }
+            pre_hook_summary = await hook_runner.run_pre_hooks(
+                job_id=job_id,
+                step=current_step,
+                hooks=pre_parse_hooks,
+                payload={"input_summary": parse_input_summary},
+            )
+            if pre_hook_summary.denied:
+                raise ValueError(f"Hook denied before parsing: {pre_hook_summary.message}")
+
             parsing_agent = JobParsingAgent()
             job_posting = await asyncio.to_thread(parsing_agent.parse, raw_text)
+            post_hook_summary = await hook_runner.run_post_hooks(
+                job_id=job_id,
+                step=current_step,
+                hooks=post_parse_hooks,
+                payload={
+                    "input_summary": parse_input_summary,
+                    "output_summary": {
+                        "company_name": job_posting.company_name,
+                        "job_title": job_posting.job_title,
+                        "requirements_count": len(job_posting.key_requirements or []),
+                    },
+                },
+            )
+            if post_hook_summary.denied:
+                raise ValueError(f"Hook denied after parsing: {post_hook_summary.message}")
             
             # Update job details
             job.company = job_posting.company_name

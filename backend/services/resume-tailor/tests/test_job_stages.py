@@ -755,6 +755,83 @@ async def test_process_application_emits_pipeline_failed_on_exception(session: S
 
 
 @pytest.mark.asyncio
+async def test_process_application_fails_when_parse_pre_hook_denies(session: Session, monkeypatch):
+    """Parse pre-hook denial should fail pipeline before parser execution."""
+    job = Job(url="http://emit-parse-hook-deny.com", company="Unknown", title="Unknown", status="processing", retry_count=0)
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+
+    emitted: list[JobEvent] = []
+    parser_calls = {"count": 0}
+
+    async def capture_emit(event: JobEvent):
+        emitted.append(event)
+
+    class FakeScrapeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"text": "job description text"}
+
+    class FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return FakeScrapeResponse()
+
+    class DenyParsingHookRunner:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def run_pre_hooks(self, job_id, step, hooks, payload=None):
+            if step == "parsing":
+                return SimpleNamespace(denied=True, message="parse policy blocked", warnings=[])
+            return SimpleNamespace(denied=False, message=None, warnings=[])
+
+        async def run_post_hooks(self, job_id, step, hooks, payload=None):
+            return SimpleNamespace(denied=False, message=None, warnings=[])
+
+    def parse_job(_raw_text):
+        parser_calls["count"] += 1
+        return SimpleNamespace(company_name="Acme", job_title="Software Engineer", key_requirements=["Python"])
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(server, "AgentHookRunner", DenyParsingHookRunner)
+    monkeypatch.setattr(server, "JobParsingAgent", lambda: SimpleNamespace(parse=parse_job))
+    monkeypatch.setattr(server, "load_master_resume", lambda _: "\\begin{document}master\\end{document}")
+    monkeypatch.setattr(
+        server,
+        "ResumeTailorAgent",
+        lambda: SimpleNamespace(tailor=lambda *_: "\\begin{document}tailored\\end{document}"),
+    )
+    compile_pdf_calls = {"count": 0}
+
+    def fake_compile_pdf(**_kwargs):
+        compile_pdf_calls["count"] += 1
+        return "./output/acme.pdf"
+
+    monkeypatch.setattr(server, "compile_pdf", fake_compile_pdf)
+    monkeypatch.setattr(server.event_bus, "emit", capture_emit)
+    monkeypatch.setattr(server.event_bus, "create_job_queue", AsyncMock(return_value=asyncio.Queue()))
+    monkeypatch.setattr(server.event_bus, "cleanup_job_queue", AsyncMock())
+
+    await server.process_application(job.id, job.url)
+
+    session.refresh(job)
+    assert job.status == "failed"
+    assert job.error_message == "Hook denied before parsing: parse policy blocked"
+    assert parser_calls["count"] == 0
+    assert any(event.type == EventType.PIPELINE_FAILED for event in emitted)
+    assert compile_pdf_calls["count"] == 0
+
+
+@pytest.mark.asyncio
 async def test_process_application_retries_tailoring_then_succeeds(session: Session, monkeypatch):
     """Tailoring failures should retry up to MAX_RETRIES before succeeding."""
     job = Job(url="http://emit-retry-success.com", company="Unknown", title="Unknown", status="processing", retry_count=0)
