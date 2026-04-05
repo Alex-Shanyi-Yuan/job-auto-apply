@@ -454,7 +454,7 @@ async def process_application(job_id: int, url: str):
                 payload={"input_summary": parse_input_summary},
             )
             if pre_hook_summary.denied:
-                raise ValueError(f"Hook denied before parsing: {pre_hook_summary.message}")
+                raise ValueError(f"Hook failed before parsing: {pre_hook_summary.message}")
 
             parsing_agent = JobParsingAgent()
             job_posting = await asyncio.to_thread(parsing_agent.parse, raw_text)
@@ -472,7 +472,7 @@ async def process_application(job_id: int, url: str):
                 },
             )
             if post_hook_summary.denied:
-                raise ValueError(f"Hook denied after parsing: {post_hook_summary.message}")
+                raise ValueError(f"Hook failed after parsing: {post_hook_summary.message}")
             
             # Update job details
             job.company = job_posting.company_name
@@ -511,7 +511,7 @@ async def process_application(job_id: int, url: str):
                 payload={"master_latex": master_latex, "url": url},
             )
             if pre_hook_summary.denied:
-                raise ValueError(f"Hook denied before tailoring: {pre_hook_summary.message}")
+                raise ValueError(f"Hook failed before tailoring: {pre_hook_summary.message}")
 
             tailor_agent = ResumeTailorAgent()
             while True:
@@ -528,7 +528,7 @@ async def process_application(job_id: int, url: str):
                         },
                     )
                     if post_hook_summary.denied:
-                        raise ValueError(f"Hook denied after tailoring: {post_hook_summary.message}")
+                        raise ValueError(f"Hook failed after tailoring: {post_hook_summary.message}")
                     break
                 except ValueError as tailoring_error:
                     if job.retry_count < MAX_RETRIES:

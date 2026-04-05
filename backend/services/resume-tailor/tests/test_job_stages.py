@@ -825,7 +825,7 @@ async def test_process_application_fails_when_parse_pre_hook_denies(session: Ses
 
     session.refresh(job)
     assert job.status == "failed"
-    assert job.error_message == "Hook denied before parsing: parse policy blocked"
+    assert job.error_message == "Hook failed before parsing: parse policy blocked"
     assert parser_calls["count"] == 0
     assert any(event.type == EventType.PIPELINE_FAILED for event in emitted)
     assert compile_pdf_calls["count"] == 0
@@ -959,6 +959,6 @@ async def test_process_application_marks_failed_when_hook_denies_after_retries(s
     session.refresh(job)
     assert job.status == "failed"
     assert job.retry_count == 2
-    assert "hook denied" in (job.error_message or "").lower()
+    assert "hook failed" in (job.error_message or "").lower()
     assert any(event.type == EventType.RETRY_EXHAUSTED for event in emitted)
     compile_pdf_mock.assert_not_called()

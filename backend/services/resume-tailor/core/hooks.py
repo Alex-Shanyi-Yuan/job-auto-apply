@@ -137,7 +137,7 @@ class AgentHookRunner:
                 continue
 
             summary.denied = True
-            summary.message = decision.message or f"Hook denied: {hook.name}"
+            summary.message = decision.message or f"Hook failed: {hook.name}"
             await self._emit(EventType.HOOK_FAILED, job_id, step, hook.name, summary.message)
             return summary
 
