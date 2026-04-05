@@ -80,6 +80,36 @@ class TailoredLatexObservabilityHook(Hook):
         return HookDecision(HookResult.ALLOW, "Observability check passed")
 
 
+class WarnOnLowScoreHook(Hook):
+    name = "warn-on-low-score"
+
+    def __init__(self, threshold: int = 30):
+        self.threshold = threshold
+
+    def evaluate(self, context: HookContext) -> HookDecision:
+        score = context.payload.get("score")
+        if score is None:
+            return HookDecision(HookResult.ALLOW, "No score supplied")
+        try:
+            normalized_score = int(score)
+        except (TypeError, ValueError):
+            return HookDecision(HookResult.WARN, "Score is not numeric")
+        if normalized_score < self.threshold:
+            return HookDecision(HookResult.WARN, f"Low score detected: {normalized_score}")
+        return HookDecision(HookResult.ALLOW, "Score above threshold")
+
+
+class LogAgentOutputHook(Hook):
+    name = "log-agent-output"
+
+    def evaluate(self, context: HookContext) -> HookDecision:
+        output_summary = context.payload.get("output_summary")
+        if output_summary is None:
+            output_summary = context.payload.get("tailored_latex")
+        summary_text = str(output_summary)[:200]
+        return HookDecision(HookResult.ALLOW, f"Output summary: {summary_text}")
+
+
 class AgentHookRunner:
     def __init__(self, event_bus):
         self._event_bus = event_bus

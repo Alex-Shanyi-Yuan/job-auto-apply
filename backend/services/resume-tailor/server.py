@@ -20,6 +20,7 @@ from core.site_plugins import resolve_job_url
 from core.event_bus import event_bus, EventType, JobEvent
 from core.hooks import (
     AgentHookRunner,
+    LogAgentOutputHook,
     MasterResumeValidationHook,
     TailoredLatexObservabilityHook,
     TailoredLatexValidationHook,
@@ -391,9 +392,9 @@ async def process_application(job_id: int, url: str):
         current_step: Optional[str] = None
         hook_runner = AgentHookRunner(event_bus)
         pre_parse_hooks = []
-        post_parse_hooks = []
+        post_parse_hooks = [LogAgentOutputHook()]
         pre_tailor_hooks = [MasterResumeValidationHook()]
-        post_tailor_hooks = [TailoredLatexValidationHook(), TailoredLatexObservabilityHook()]
+        post_tailor_hooks = [TailoredLatexValidationHook(), TailoredLatexObservabilityHook(), LogAgentOutputHook()]
         try:
             await event_bus.emit(
                 JobEvent(
@@ -529,7 +530,7 @@ async def process_application(job_id: int, url: str):
                     if post_hook_summary.denied:
                         raise ValueError(f"Hook denied after tailoring: {post_hook_summary.message}")
                     break
-                except Exception as tailoring_error:
+                except ValueError as tailoring_error:
                     if job.retry_count < MAX_RETRIES:
                         job.retry_count += 1
                         session.add(job)

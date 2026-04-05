@@ -10,8 +10,11 @@ from core.hooks import (
     HookContext,
     HookDecision,
     HookResult,
+    LogAgentOutputHook,
     MasterResumeValidationHook,
+    TailoredLatexObservabilityHook,
     TailoredLatexValidationHook,
+    WarnOnLowScoreHook,
 )
 
 
@@ -90,3 +93,63 @@ async def test_agent_hook_runner_emits_warn_and_deny_events():
     assert EventType.HOOK_STARTED in event_types
     assert EventType.HOOK_WARNED in event_types
     assert EventType.HOOK_FAILED in event_types
+
+
+def test_tailored_latex_observability_warns_for_large_drop():
+    hook = TailoredLatexObservabilityHook()
+    context = HookContext(
+        job_id=1,
+        step="tailoring",
+        payload={
+            "master_latex": "\\begin{document}" + ("A" * 500) + "\\end{document}",
+            "tailored_latex": "\\begin{document}short\\end{document}",
+        },
+    )
+
+    result = hook.evaluate(context)
+
+    assert result.result == HookResult.WARN
+
+
+def test_warn_on_low_score_hook_warns_below_threshold():
+    hook = WarnOnLowScoreHook()
+    context = HookContext(job_id=1, step="scoring", payload={"score": 25})
+
+    result = hook.evaluate(context)
+
+    assert result.result == HookResult.WARN
+    assert "low score" in (result.message or "").lower()
+
+
+def test_log_agent_output_hook_allows():
+    hook = LogAgentOutputHook()
+    context = HookContext(job_id=1, step="tailoring", payload={"summary": "ok"})
+
+    result = hook.evaluate(context)
+
+    assert result.result == HookResult.ALLOW
+
+
+class _AllowHook(Hook):
+    name = "allow-hook"
+
+    def evaluate(self, context: HookContext) -> HookDecision:
+        return HookDecision(result=HookResult.ALLOW, message="ok")
+
+
+@pytest.mark.asyncio
+async def test_agent_hook_runner_emits_validated_event_for_allow():
+    bus = EventBus()
+    await bus.create_job_queue(8)
+    runner = AgentHookRunner(bus)
+
+    summary = await runner.run_pre_hooks(job_id=8, step="parsing", hooks=[_AllowHook()], payload={"x": 1})
+
+    queue = await bus.get_job_queue(8)
+    event_types = []
+    while not queue.empty():
+        event_types.append((await queue.get()).type)
+
+    assert summary.denied is False
+    assert EventType.HOOK_STARTED in event_types
+    assert EventType.HOOK_VALIDATED in event_types
