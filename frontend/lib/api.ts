@@ -1,14 +1,23 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 export type JobStatus =
-  | "processing"
-  | "applied"
-  | "interviewing"
-  | "rejected"
-  | "offer"
-  | "failed"
   | "suggested"
-  | "dismissed";
+  | "active"
+  | "offer"
+  | "turndown"
+  | "processing"
+  | "rejected"
+  | "dismissed"
+  | "failed"
+  ;
+
+export type StageName = "applied" | "oa" | "interview" | "offer";
+
+export interface JobStageResponse {
+  stage_name: StageName;
+  completed_at?: string | null;
+  notes?: string | null;
+}
 
 export interface Job {
   id: number;
@@ -19,7 +28,38 @@ export interface Job {
   score?: number | null;
   requirements?: string[] | null;
   error_message?: string | null;
+  stages?: JobStageResponse[];
+  rejection_stage?: StageName | null;
+  rejection_reason?: string | null;
   created_at: string;
+  updated_at: string;
+}
+
+export interface StageUpdate {
+  name: StageName;
+  completed: boolean;
+  notes?: string | null;
+}
+
+export interface UpdateJobStagesPayload {
+  stages: StageUpdate[];
+  rejection_stage?: StageName | null;
+  rejection_reason?: string | null;
+  status_override?: "active" | "rejected" | "turndown";
+}
+
+export interface JobWithStagesResponse {
+  id: number;
+  url: string;
+  company: string;
+  title: string;
+  status: JobStatus;
+  score?: number | null;
+  stages: JobStageResponse[];
+  rejection_stage?: StageName | null;
+  rejection_reason?: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface JobSource {
@@ -195,6 +235,16 @@ export async function refreshSuggestions(
 export async function dismissJob(jobId: number): Promise<Job> {
   return request<Job>(`/jobs/${jobId}/dismiss`, {
     method: "POST",
+  });
+}
+
+export async function updateJobStages(
+  jobId: number,
+  payload: UpdateJobStagesPayload,
+): Promise<JobWithStagesResponse> {
+  return request<JobWithStagesResponse>(`/jobs/${jobId}/stages`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
   });
 }
 

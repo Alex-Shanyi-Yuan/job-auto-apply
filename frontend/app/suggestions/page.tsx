@@ -48,8 +48,6 @@ export default function SuggestionsPage() {
   // Collapsible sources section
   const [sourcesExpanded, setSourcesExpanded] = useState(true);
   
-  // Track if we've started polling (to auto-resume on page load)
-  const [pollingStarted, setPollingStarted] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
@@ -113,7 +111,6 @@ export default function SuggestionsPage() {
         
         // If a scan is in progress, start polling
         if (status.is_scanning && !pollIntervalRef.current) {
-          setPollingStarted(true);
           pollIntervalRef.current = setInterval(pollScanStatus, 1500);
         }
       } catch (err) {
@@ -184,9 +181,10 @@ export default function SuggestionsPage() {
       }
       pollIntervalRef.current = setInterval(pollScanStatus, 1500);
       pollScanStatus(); // Immediate first poll
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Failed to refresh", err);
-      setError(err.message || "Failed to refresh suggestions");
+      const message = err instanceof Error ? err.message : "Failed to refresh suggestions";
+      setError(message);
     }
   };
 
@@ -233,7 +231,7 @@ export default function SuggestionsPage() {
           try {
             const updatedJob = await getJob(appliedJob.id);
             if (updatedJob.status !== 'processing') {
-              if (updatedJob.status === 'applied') {
+              if (updatedJob.status === 'active') {
                 // Success - remove from suggestions
                 setSuggestions(prev => prev.filter(j => j.id !== job.id));
                 // Don't clear error for this job - other jobs might have errors
@@ -764,7 +762,7 @@ export default function SuggestionsPage() {
                     <CardTitle className="text-lg font-semibold line-clamp-2" title={job.title}>
                       {job.title}
                     </CardTitle>
-                    {job.score !== undefined && (
+                    {job.score != null && (
                       <Badge className={`shrink-0 ${getScoreBadgeStyle(job.score)}`}>
                         {job.score}%
                       </Badge>
@@ -928,7 +926,7 @@ export default function SuggestionsPage() {
                                       <div className="flex items-center gap-2 min-w-0 flex-1">
                                         <span className="truncate" title={job.title}>{job.title}</span>
                                         <span className="text-gray-400 text-xs shrink-0">@ {job.company}</span>
-                                        {job.score !== null && (
+                                        {job.score != null && (
                                           <Badge 
                                             variant="outline" 
                                             className={`text-xs shrink-0 ${
@@ -982,7 +980,7 @@ export default function SuggestionsPage() {
                                             <div className="flex items-center gap-2 min-w-0 flex-1">
                                               <span className="truncate" title={job.title}>{job.title}</span>
                                               <span className="text-gray-400 text-xs shrink-0">@ {job.company}</span>
-                                              {job.score !== null && (
+                                              {job.score != null && (
                                                 <Badge 
                                                   variant="outline" 
                                                   className="text-xs shrink-0 border-red-500 text-red-700"
@@ -1023,7 +1021,7 @@ export default function SuggestionsPage() {
                                             <div className="flex items-center gap-2 min-w-0 flex-1">
                                               <span className="truncate" title={job.title}>{job.title}</span>
                                               <span className="text-gray-400 text-xs shrink-0">@ {job.company}</span>
-                                              {job.score !== null && (
+                                              {job.score != null && (
                                                 <Badge 
                                                   variant="outline" 
                                                   className={`text-xs shrink-0 ${

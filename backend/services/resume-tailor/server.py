@@ -3,6 +3,7 @@ from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
+from enum import Enum
 import httpx
 import os
 import json
@@ -12,7 +13,7 @@ from pathlib import Path
 from sqlmodel import Session, select
 from contextlib import asynccontextmanager
 
-from database import create_db_and_tables, get_session, Job, JobSource, Settings, engine, utcnow
+from database import create_db_and_tables, get_session, Job, JobSource, JobStage, Settings, engine, utcnow
 from core import JobParsingAgent, ResumeTailorAgent, JobDiscoveryAgent, JobScoringAgent, compile_pdf
 from core.db_sync import reconcile_postgres_and_sqlite
 from core.site_plugins import resolve_job_url
@@ -75,11 +76,12 @@ async def _run_db_reconcile(phase: str):
 # Initialize FastAPI
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    create_db_and_tables()
-    if SYNC_ON_BOOT:
-        await _run_db_reconcile("startup")
+    if os.getenv("TESTING") != "true":  # Skip in test mode
+        create_db_and_tables()
+        if SYNC_ON_BOOT:
+            await _run_db_reconcile("startup")
     yield
-    if SYNC_ON_SHUTDOWN:
+    if SYNC_ON_SHUTDOWN and os.getenv("TESTING") != "true":
         await _run_db_reconcile("shutdown")
 
 app = FastAPI(lifespan=lifespan)
@@ -209,6 +211,70 @@ class GlobalFilterUpdate(BaseModel):
     filter_prompt: str
 
 
+class StageName(str, Enum):
+    APPLIED = "applied"
+    OA = "oa"
+    INTERVIEW = "interview"
+    OFFER = "offer"
+
+
+class StageUpdate(BaseModel):
+    name: StageName  # Change from str to StageName
+    completed: bool
+    notes: Optional[str] = None
+
+
+class StatusOverride(str, Enum):
+    ACTIVE = "active"
+    REJECTED = "rejected"
+    TURNDOWN = "turndown"
+
+
+class UpdateJobStagesRequest(BaseModel):
+    stages: list[StageUpdate]
+    rejection_stage: Optional[StageName] = None
+    rejection_reason: Optional[str] = None
+    status_override: Optional[StatusOverride] = None
+
+
+class JobStageResponse(BaseModel):
+    stage_name: StageName
+    completed_at: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class JobWithStagesResponse(BaseModel):
+    id: int
+    url: str
+    company: str
+    title: str
+    status: str
+    score: Optional[int] = None
+    stages: list[JobStageResponse]
+    rejection_stage: Optional[StageName] = None
+    rejection_reason: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class JobDetailResponse(BaseModel):
+    """Extended job response with stages for GET /jobs/{id}"""
+    id: int
+    url: str
+    company: str
+    title: str
+    status: str
+    score: Optional[int] = None
+    requirements: Optional[list] = None
+    error_message: Optional[str] = None
+    pdf_path: Optional[str] = None
+    stages: list[JobStageResponse]
+    rejection_stage: Optional[StageName] = None
+    rejection_reason: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
 # === Helper Functions ===
 
 GLOBAL_FILTER_KEY = "global_filter_prompt"
@@ -250,6 +316,29 @@ def load_master_resume(file_path: str) -> str:
         raise FileNotFoundError(f"Master resume not found: {file_path}")
     with open(path, 'r', encoding='utf-8') as f:
         return f.read()
+
+
+def ensure_applied_stage(session: Session, job_id: int) -> JobStage:
+    """Ensure a job has a completed 'applied' stage without creating duplicates."""
+    applied_stage = session.exec(
+        select(JobStage).where(
+            JobStage.job_id == job_id,
+            JobStage.stage_name == StageName.APPLIED.value
+        )
+    ).first()
+
+    if not applied_stage:
+        applied_stage = JobStage(
+            job_id=job_id,
+            stage_name=StageName.APPLIED.value,
+            completed_at=utcnow(),
+        )
+        session.add(applied_stage)
+    elif applied_stage.completed_at is None:
+        applied_stage.completed_at = utcnow()
+        applied_stage.updated_at = utcnow()
+
+    return applied_stage
 
 
 def job_to_response(job: Job) -> JobResponse:
@@ -335,7 +424,7 @@ async def process_application(job_id: int, url: str):
             
             # 5. Save path
             job.pdf_path = pdf_path
-            job.status = "applied"
+            job.status = "active"
             session.add(job)
             session.commit()
             logger.info(f"Job {job_id} processing completed successfully. PDF saved at {pdf_path}")
@@ -687,8 +776,9 @@ async def apply_job(request: ApplyRequest, background_tasks: BackgroundTasks):
         ).first()
         
         if existing_job:
-            # Update existing job to processing status
+            # Move to processing and ensure initial applied stage exists.
             existing_job.status = "processing"
+            ensure_applied_stage(session, existing_job.id)
             session.add(existing_job)
             session.commit()
             session.refresh(existing_job)
@@ -699,6 +789,10 @@ async def apply_job(request: ApplyRequest, background_tasks: BackgroundTasks):
             session.add(job)
             session.commit()
             session.refresh(job)
+            ensure_applied_stage(session, job.id)
+            session.add(job)
+            session.commit()
+            session.refresh(job)
     
     # Start background processing
     background_tasks.add_task(process_application, job.id, request.url)
@@ -706,26 +800,76 @@ async def apply_job(request: ApplyRequest, background_tasks: BackgroundTasks):
     return job_to_response(job)
 
 
-@app.get("/jobs", response_model=List[JobResponse])
+@app.get("/jobs", response_model=List[JobDetailResponse])
 def list_jobs():
-    """List all jobs (excluding suggested/dismissed)."""
+    """Get all jobs (excludes suggested and dismissed jobs)."""
     with Session(engine) as session:
         jobs = session.exec(
             select(Job)
             .where(Job.status.not_in(["suggested", "dismissed"]))
             .order_by(Job.created_at.desc())
         ).all()
-        return [job_to_response(job) for job in jobs]
+        result = []
+        for job in jobs:
+            # Get stages for this job
+            stages = session.exec(
+                select(JobStage).where(
+                    JobStage.job_id == job.id,
+                    JobStage.completed_at.isnot(None)
+                ).order_by(JobStage.completed_at)
+            ).all()
+            job_dict = job_to_response(job).__dict__
+            job_dict["stages"] = [
+                {
+                    "stage_name": s.stage_name,
+                    "completed_at": s.completed_at.isoformat() if s.completed_at else None,
+                    "notes": s.notes
+                }
+                for s in stages
+            ]
+            job_dict["rejection_stage"] = job.rejection_stage
+            job_dict["rejection_reason"] = job.rejection_reason
+            result.append(job_dict)
+        return result
 
 
-@app.get("/jobs/{job_id}", response_model=JobResponse)
+@app.get("/jobs/{job_id}", response_model=JobDetailResponse)
 def get_job(job_id: int):
-    """Get a specific job by ID."""
+    """Get details for a specific job, including stages."""
     with Session(engine) as session:
         job = session.get(Job, job_id)
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
-        return job_to_response(job)
+        # Get all completed stages for this job
+        stages = session.exec(
+            select(JobStage).where(
+                JobStage.job_id == job_id,
+                JobStage.completed_at.isnot(None)
+            ).order_by(JobStage.completed_at)
+        ).all()
+        return {
+            "id": job.id,
+            "url": job.url,
+            "company": job.company,
+            "title": job.title,
+            "status": job.status,
+            "score": job.score,
+            "requirements": json.loads(job.requirements) if job.requirements else None,
+            "error_message": job.error_message,
+            "pdf_path": job.pdf_path,
+            "stages": [
+                {
+                    "stage_name": s.stage_name,
+                    "completed_at": s.completed_at.isoformat() if s.completed_at else None,
+                    "notes": s.notes
+                }
+                for s in stages
+            ],
+            "rejection_stage": job.rejection_stage,
+            "rejection_reason": job.rejection_reason,
+            "created_at": job.created_at.isoformat(),
+            "updated_at": job.updated_at.isoformat(),
+        }
 
 
 @app.get("/jobs/{job_id}/pdf")
@@ -879,6 +1023,133 @@ def dismiss_job(job_id: int):
         session.commit()
         session.refresh(job)
         return job_to_response(job)
+
+
+@app.put("/jobs/{job_id}/stages", response_model=JobWithStagesResponse)
+def update_job_stages(job_id: int, request: UpdateJobStagesRequest):
+    """Update interview stages for a job.
+    
+    Args:
+        job_id: The ID of the job to update
+        request: Stage updates and optional rejection info
+        
+    Returns:
+        JobWithStagesResponse with updated job and completed stages
+        
+    Raises:
+        HTTPException: 404 if job not found
+        
+    Notes:
+        - Only completed stages are returned in response
+        - Setting completed=False removes stage completion timestamp
+        - Rejection sets job.status to 'rejected'
+    """
+    with Session(engine) as session:
+        # Get job
+        job = session.exec(select(Job).where(Job.id == job_id)).first()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        
+        # Update each stage
+        for stage_update in request.stages:
+            stage_name = stage_update.name.value
+            # Get or create stage
+            stage = session.exec(
+                select(JobStage).where(
+                    JobStage.job_id == job_id,
+                    JobStage.stage_name == stage_name
+                )
+            ).first()
+            
+            if stage_update.completed:
+                # Mark as completed
+                if not stage:
+                    stage = JobStage(
+                        job_id=job_id,
+                        stage_name=stage_name,
+                        completed_at=utcnow(),
+                        notes=stage_update.notes
+                    )
+                    session.add(stage)
+                else:
+                    if stage.completed_at is None:
+                        stage.completed_at = utcnow()
+                    if stage_update.notes is not None:  # Check for None, not truthiness
+                        stage.notes = stage_update.notes or None
+                    stage.updated_at = utcnow()
+            else:
+                # Mark as not completed
+                if stage:
+                    stage.completed_at = None
+                    stage.updated_at = utcnow()
+        
+        completed_stages = session.exec(
+            select(JobStage).where(
+                JobStage.job_id == job_id,
+                JobStage.completed_at.isnot(None)
+            ).order_by(JobStage.completed_at)
+        ).all()
+        has_completed_stages = len(completed_stages) > 0
+        has_offer_stage = any(stage.stage_name == StageName.OFFER.value for stage in completed_stages)
+        latest_completed_stage = completed_stages[-1].stage_name if completed_stages else StageName.APPLIED.value
+
+        # Update rejection info
+        if "rejection_stage" in request.model_fields_set and request.rejection_stage:
+            job.status = "rejected"
+            job.rejection_stage = request.rejection_stage.value
+            job.rejection_reason = request.rejection_reason
+            job.updated_at = utcnow()
+        elif "rejection_stage" in request.model_fields_set:
+            # Explicitly clear rejection details when rejection_stage is set to null.
+            job.rejection_stage = None
+            job.rejection_reason = None
+            if has_offer_stage:
+                job.status = "offer"
+            else:
+                job.status = "active"
+            job.updated_at = utcnow()
+        else:
+            if has_completed_stages and not job.rejection_stage:
+                job.status = "offer" if has_offer_stage else "active"
+
+        if request.status_override:
+            if request.status_override == StatusOverride.TURNDOWN:
+                job.status = "turndown"
+                job.rejection_stage = None
+                job.rejection_reason = None
+            elif request.status_override == StatusOverride.REJECTED:
+                job.status = "rejected"
+                if not job.rejection_stage:
+                    job.rejection_stage = StageName(latest_completed_stage)
+            elif request.status_override == StatusOverride.ACTIVE:
+                job.status = "offer" if has_offer_stage else "active"
+                job.rejection_stage = None
+                job.rejection_reason = None
+            job.updated_at = utcnow()
+        
+        session.commit()
+        session.refresh(job)
+        
+        return JobWithStagesResponse(
+            id=job.id,
+            url=job.url,
+            company=job.company,
+            title=job.title,
+            status=job.status,
+            score=job.score,
+            stages=[
+                JobStageResponse(
+                    stage_name=s.stage_name,
+                    completed_at=s.completed_at.isoformat() if s.completed_at else None,
+                    notes=s.notes
+                )
+                for s in completed_stages
+            ],
+            rejection_stage=job.rejection_stage,
+            rejection_reason=job.rejection_reason,
+            created_at=job.created_at.isoformat(),
+            updated_at=job.updated_at.isoformat(),
+        )
 
 
 @app.get("/suggestions/status", response_model=ScanStatusResponse)

@@ -35,12 +35,28 @@ class Job(SQLModel, table=True):
     url: str
     company: str
     title: str
-    status: str = "suggested"  # suggested, applied, interviewing, rejected, offer, dismissed, failed
+    status: str = "suggested"  # suggested, processing, active, rejected, dismissed, failed
     requirements: Optional[str] = None  # JSON string of key requirements
     pdf_path: Optional[str] = None
     score: Optional[int] = None  # Match score 0-100
     source_id: Optional[int] = Field(default=None, foreign_key="jobsource.id")
     error_message: Optional[str] = None  # Error message if processing failed
+    retry_count: int = 0  # Track automatic retry attempts
+    rejection_stage: Optional[str] = None  # 'applied' | 'oa' | 'interview' | 'offer'
+    rejection_reason: Optional[str] = None  # Free-form rejection notes
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class JobStage(SQLModel, table=True):
+    """Tracks individual stages in the interview pipeline for a job."""
+    __tablename__ = "jobstage"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    job_id: int = Field(foreign_key="job.id", ondelete="CASCADE")
+    stage_name: str  # 'applied' | 'oa' | 'interview' | 'offer'
+    completed_at: Optional[datetime] = None  # When stage was completed
+    notes: Optional[str] = None  # User notes for this stage
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 

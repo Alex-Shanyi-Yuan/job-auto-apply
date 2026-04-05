@@ -1,148 +1,111 @@
-# Resume Tailor Service Specification
+# Resume Tailor API
 
-## Goal
-A FastAPI microservice that orchestrates the entire job discovery, scoring, and resume tailoring workflow.
+Base URL (local): `http://localhost:8000`
 
-## 1. System Context
+## Jobs
 
-### Architecture
-**Dockerized Python 3.11+** environment with bundled TeX Live distribution.
-Acts as the primary backend API for the AutoCareer platform.
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/apply` | Start tailoring workflow for a job URL. Ensures initial `applied` stage exists. |
+| `GET` | `/jobs` | List non-suggested, non-dismissed jobs including stage/rejection fields. |
+| `GET` | `/jobs/{id}` | Get a single job with full stage detail. |
+| `PUT` | `/jobs/{id}/stages` | Update stage completion/notes and rejection metadata. |
+| `GET` | `/jobs/{id}/pdf` | Download generated resume PDF. |
+| `POST` | `/jobs/{id}/dismiss` | Dismiss suggested job. |
 
-### Dependencies
-*   **Database:** PostgreSQL (via `SQLModel` + Alembic migrations)
-*   **Scraper:** Job Scraper Service (via HTTP)
-*   **LLM:** Google Gemini Pro (via `google-genai`)
-*   **Compiler:** TeX Live (`pdflatex`)
+## Sources
 
-## 2. API Endpoints
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/sources` | List job sources. |
+| `POST` | `/sources` | Create job source. |
+| `PUT` | `/sources/{id}` | Update job source. |
+| `DELETE` | `/sources/{id}` | Delete job source. |
 
-### Jobs API
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/apply` | POST | Start resume tailoring (background task) |
-| `/jobs` | GET | List all jobs (excludes suggested/dismissed) |
-| `/jobs/{id}` | GET | Get job details |
-| `/jobs/{id}/pdf` | GET | Download tailored PDF |
-| `/jobs/{id}/dismiss` | POST | Dismiss a suggested job |
+## Suggestions
 
-### Sources API
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/sources` | GET | List all job sources |
-| `/sources` | POST | Create a new job source |
-| `/sources/{id}` | PUT | Update a job source |
-| `/sources/{id}` | DELETE | Delete a job source |
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/suggestions` | List suggested jobs ordered by score. |
+| `POST` | `/suggestions/refresh` | Trigger discovery scan. Optional `source_ids`. |
+| `GET` | `/suggestions/status` | Scan progress and per-source report. |
 
-### Suggestions API
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/suggestions` | GET | List suggested jobs (sorted by score) |
-| `/suggestions/refresh` | POST | Trigger AI job discovery (accepts optional `source_ids` array) |
-| `/suggestions/status` | GET | Get scan progress with per-source results |
+## Settings
 
-### Settings API
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/settings/global-filter` | GET | Get global filter prompt |
-| `/settings/global-filter` | PUT | Update global filter prompt |
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/settings/global-filter` | Read global discovery filter. |
+| `PUT` | `/settings/global-filter` | Update global discovery filter. |
 
-## 3. Module Specifications
+---
 
-### Module 1: API Server (`server.py`)
-**Responsibility:** Entry point and API routing.
-*   **Middleware:** CORS enabled for Frontend communication.
-*   **Background Tasks:** Job discovery and resume tailoring run asynchronously.
-*   **Logging:** Configurable logging levels.
+## Stage Tracking Request/Response
 
-### Module 2: AI Agents (`core/agents.py`)
-**Responsibility:** LLM-powered intelligence.
+### `PUT /jobs/{id}/stages` Request
 
-| Agent | Purpose |
-|-------|---------|
-| `JobDiscoveryAgent` | Parses search result HTML to extract job listings |
-| `JobScoringAgent` | Scores job-resume match (0-100) |
-| `JobParsingAgent` | Extracts structured data from job descriptions |
-| `ResumeTailorAgent` | Tailors LaTeX resume to job requirements |
-
-### Module 3: Job Scraping (`core/jd_scraper.py`)
-**Responsibility:** Obtaining job data.
-*   **Scraping:** Delegates to the **Job Scraper Service** (`http://scraper:8001/scrape`).
-*   **HTML Retrieval:** Gets raw HTML for job discovery.
-
-### Module 4: PDF Compilation (`core/latex_compiler.py`)
-**Responsibility:** Generating the final asset.
-*   **Process:**
-    *   Writes tailored LaTeX to a temporary `.tex` file.
-    *   Runs `pdflatex` in a subprocess.
-    *   Moves output to `output/` directory.
-    *   Cleans up auxiliary files (`.log`, `.aux`).
-*   **Naming:** Uses sanitized Company Name + Date + UUID to prevent collisions.
-
-### Module 5: Database (`database.py`)
-**Responsibility:** Persistence.
-*   **ORM:** SQLModel (Pydantic + SQLAlchemy).
-*   **Migrations:** Alembic for schema versioning.
-*   **Tables:** `settings`, `jobsource`, `job`
-
-## 4. Database Schema
-
-### Settings Table
-```sql
-CREATE TABLE settings (
-    key VARCHAR PRIMARY KEY,
-    value TEXT,
-    updated_at TIMESTAMP
-);
+```json
+{
+  "stages": [
+    { "name": "applied", "completed": true, "notes": "Applied via careers page" },
+    { "name": "oa", "completed": true, "notes": "Completed HackerRank" },
+    { "name": "interview", "completed": false },
+    { "name": "offer", "completed": false }
+  ],
+  "rejection_stage": null,
+  "rejection_reason": null
+}
 ```
 
-### JobSource Table
-```sql
-CREATE TABLE jobsource (
-    id SERIAL PRIMARY KEY,
-    url VARCHAR NOT NULL,
-    name VARCHAR NOT NULL,
-    filter_prompt TEXT,          -- Optional source-specific filter
-    last_scraped_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT NOW()
-);
+### Response (abridged)
+
+```json
+{
+  "id": 123,
+  "status": "active",
+  "stages": [
+    {
+      "stage_name": "applied",
+      "completed_at": "2026-04-05T00:12:00",
+      "notes": "Applied via careers page"
+    },
+    {
+      "stage_name": "oa",
+      "completed_at": "2026-04-08T16:45:00",
+      "notes": "Completed HackerRank"
+    }
+  ],
+  "rejection_stage": null,
+  "rejection_reason": null,
+  "created_at": "2026-04-05T00:12:00",
+  "updated_at": "2026-04-08T16:45:00"
+}
 ```
 
-### Job Table
-```sql
-CREATE TABLE job (
-    id SERIAL PRIMARY KEY,
-    url VARCHAR NOT NULL UNIQUE,
-    company VARCHAR NOT NULL,
-    title VARCHAR NOT NULL,
-    status VARCHAR DEFAULT 'processing',  -- processing, applied, interviewing, rejected, offer, failed, suggested, dismissed
-    score INTEGER,                         -- AI relevance score 0-100
-    requirements JSON,                     -- Extracted requirements list
-    error_message VARCHAR,                 -- Error details if failed
-    pdf_path VARCHAR,
-    source_id INTEGER REFERENCES jobsource(id),
-    created_at TIMESTAMP DEFAULT NOW()
-);
-```
+---
 
-## 5. Configuration
-*   `GOOGLE_API_KEY`: Required for Gemini Pro.
-*   `DATABASE_URL`: Postgres connection string.
-*   `SCRAPER_SERVICE_URL`: URL of the scraper service.
-*   `MASTER_RESUME_PATH`: Path to the LaTeX template.
+## Data Model Notes
 
-## 6. Job Discovery Flow
+### `job` (core fields)
 
-1. User configures **Job Sources** (job board search URLs + filter prompts)
-2. User sets **Global Filter** (criteria applied to all sources)
-3. User clicks **Refresh Suggestions**
-4. For each source:
-   - Scraper fetches search result HTML
-   - `JobDiscoveryAgent` extracts job listings from HTML
-   - For each discovered job:
-     - `JobScoringAgent` scores relevance (0-100)
-     - Job saved with `suggested` status
-5. Frontend polls `/suggestions/status` for progress
-6. User reviews suggested jobs, clicks **Apply** or **Dismiss**
-7. Apply triggers resume tailoring workflow
+- `status`: `suggested | processing | active | rejected | dismissed | failed`
+- `rejection_stage`: nullable `applied | oa | interview | offer`
+- `rejection_reason`: nullable text
 
+### `jobstage`
+
+- `job_id` (FK → `job.id`)
+- `stage_name` (`applied | oa | interview | offer`)
+- `completed_at` (nullable datetime)
+- `notes` (nullable text)
+- unique constraint on `(job_id, stage_name)`
+
+---
+
+## Behavior Details
+
+- `POST /apply` is idempotent for initial stage creation (`applied` stage won’t duplicate).
+- In `PUT /jobs/{id}/stages`:
+  - setting `rejection_stage` sets status `rejected`
+  - explicitly sending `rejection_stage: null` clears rejection metadata and returns status `active`
+  - omitting `rejection_stage` preserves existing rejection metadata
+- Completed stages are returned ordered by `completed_at`.

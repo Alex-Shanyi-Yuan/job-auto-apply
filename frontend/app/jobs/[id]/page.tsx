@@ -63,7 +63,7 @@ export default function JobDetailsPage() {
               <Calendar className="h-4 w-4" />
               <span>{new Date(job.created_at).toLocaleDateString()}</span>
             </div>
-            <Badge variant={job.status === 'applied' ? 'default' : 'secondary'}>
+            <Badge variant={job.status === 'active' ? 'default' : 'secondary'}>
               {job.status}
             </Badge>
           </div>
