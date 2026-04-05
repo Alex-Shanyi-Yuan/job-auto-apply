@@ -11,6 +11,12 @@ These features are critical for system reliability and core user experience.
 ### 1. Real-Time Streaming Progress via Server-Sent Events
 
 **Priority:** 1 | **Impact:** High | **Effort:** Medium
+**Status:** ✅ Completed (2026-04-05)
+
+**Implementation Notes:**
+- Backend SSE endpoint added: `GET /jobs/{job_id}/stream`
+- Apply pipeline now emits per-step events from `process_application()`
+- Frontend job details page (`jobs/[id]`) now shows live streaming progress
 
 **Problem Statement:**
 
@@ -36,6 +42,12 @@ The frontend has no real-time visibility into long-running resume tailoring oper
 ### 2. Pre/Post Agent Hooks for Quality Control
 
 **Priority:** 2 | **Impact:** High | **Effort:** Medium
+**Status:** ✅ Completed (2026-04-05)
+
+**Implementation Notes:**
+- Hook framework added in `backend/services/resume-tailor/core/hooks.py`
+- Parse/tailor stages in `process_application()` now run pre/post hooks
+- Hook failures now surface explicit errors and trigger controlled tailoring retries
 
 **Problem Statement:**
 
@@ -65,6 +77,12 @@ The 4 AI agents (`agents.py`) execute with no validation layer between prompt an
 ### 9. Bootstrap Sequence and Startup Health Checks
 
 **Priority:** 9 | **Impact:** Medium | **Effort:** Small
+**Status:** ✅ Completed (2026-04-05)
+
+**Implementation Notes:**
+- Startup health runner added in `backend/services/resume-tailor/core/startup.py`
+- Startup checks integrated into FastAPI lifespan
+- Health endpoint added: `GET /health` (returns 503 when startup health is failed)
 
 **Problem Statement:**
 
