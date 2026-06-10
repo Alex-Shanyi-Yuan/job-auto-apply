@@ -68,3 +68,6 @@ Thumbs.db
 # *.db
 *.sqlite
 *.sqlite3
+
+# Private career documents (AMD-internal) — never commit
+docs/experience/

@@ -19,7 +19,7 @@
     }
   ],
   "skills": [
-    { "category": "Languages", "items": ["Java", "Python", "C/C++", "Golang", "JavaScript", "TypeScript", "SQL", "Verilog", "Ruby"] },
+    { "category": "Languages", "items": ["Java", "Python", "C/C++", "Golang", "JavaScript", "TypeScript", "SQL", "Verilog", "SystemVerilog (UVM)", "Ruby"] },
     { "category": "Frameworks", "items": ["React", "Next.js", "Vue", "PyTorch", "TensorFlow", "Spring Boot", "FastAPI", "Three.js"] },
     { "category": "Infrastructure", "items": ["Docker", "Kubernetes", "AWS", "Jenkins", "Kafka", "RabbitMQ", "GitHub Actions"] },
     { "category": "Concepts", "items": ["Distributed Systems", "Microservices", "REST/gRPC", "CI/CD", "OOP", "Agile", "System Design"] }
@@ -34,12 +34,16 @@
         { "title": "Software Engineer Intern (PEY)", "dates": "May 2024 -- May 2025" }
       ],
       "bullets": [
-        "Retained as a contractor following a high-performance 12-month internship to lead critical frontend infrastructure projects.",
-        "Architected a regression management platform serving 2,000+ engineers, utilizing Vue and PostgreSQL to visualize testing bottlenecks and improve silicon validation efficiency.",
-        "Engineered an AI-driven debugging pipeline that reduced validation time by autonomously identifying edge cases.",
-        "Implemented JWT authentication across Python and JavaScript services, reducing unauthorized access incidents by 90%.",
-        "Designed and deployed a CI/CD pipeline using Jenkins, reducing deployment latency by 30%.",
-        "Developed CLI automation tools in Python and Ruby (OOP), saving 20+ hours per week of manual engineering effort."
+        "Promoted to contract Software Engineer after a 12-month PEY internship to remain lead developer of TRACR, AMD's full-stack regression tracking and coverage platform (Vue 3, Node.js/TypeScript, PostgreSQL, Ruby/Python) relied on by 2,000+ engineers across the DCN, GFX, VPE, and Synthesis silicon verification teams.",
+        "Designed and shipped a role-based access control (RBAC) permission system end to end -- normalized users/groups/roles/resources schema, JWT token-based authentication, granular per-resource grants, and a request/approval UI -- replacing all-or-nothing access and cutting unauthorized access incidents by 90%.",
+        "Architected flow-based regression execution with dynamically claimed rotating workspaces, RabbitMQ job queues, and Python workers, reclaiming 100-200GB of disk per legacy flow workspace and turning multi-step silicon flows (e.g., CDC runs) into one-click launches.",
+        "Delivered real-time fleet visibility by building live regression status timelines over Server-Sent Events and RabbitMQ, pushing run states and permission changes to every connected client instantly without a refresh.",
+        "Re-architected the coverage reporting pipeline (code/functional coverage, test grading, ERB waiver and regeneration support), condensing 18 legacy scripts into 3 object-oriented flows and unblocking designer waiver workflows across teams.",
+        "Eliminated the platform's worst bottlenecks by rewriting PostgreSQL queries and removing redundant joins, slashing regression dashboard load time 20x (60s to 3s) and the settings page 3x (10s to 3s).",
+        "Drove reliability hardening: root-caused database connection leaks that crashed the production server, added disk-usage telemetry on a 5-minute cadence for proactive capacity alerts, and cut failure-email spam via per-user failure-signature deduplication.",
+        "Modernized the stack and CI/CD: migrated the API layer from JavaScript to TypeScript and CommonJS to ES6, upgraded Ruby to unlock RabbitMQ, moved cron jobs to Jenkins, and built GitHub Actions for linting, commit checks, and auto-generated release notes -- reducing deployment latency by 30%.",
+        "Prototyped AI developer tooling on AMD's internal LLM platform, including a power-analysis agent adopted by the power team and a verification chatbot showcased at AMD's Innovation event.",
+        "Authored 6+ design specifications and user docs (permission system, flow-based regressions, coverage waivers), wrote UVM-based DV tests for the DCN display pipeline (FIFO error injection, HDMI hard-reset awareness), and mentored a new intern through knowledge-transfer sessions."
       ]
     },
     {
