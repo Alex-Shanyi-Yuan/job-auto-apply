@@ -31,10 +31,19 @@ backend/services/resume-tailor/
 ├── server.py               # FastAPI server (14 endpoints)
 ├── database.py             # SQLModel models (Settings, JobSource, Job)
 ├── core/
-│   ├── agents.py           # AI Agents (Discovery, Scoring, Parsing, Tailoring)
-│   ├── llm_client.py       # Google Gemini API client
+│   ├── agents.py           # AI Agents (Discovery, Scoring, Parsing, Tailoring) — depend on LLMProvider only
+│   ├── llm_providers.py    # LLM engine: LLMProvider ABC + ClaudeAgentProvider (default), GeminiProvider, StubProvider
+│   ├── models.py           # Pydantic structured-output schemas (JobPosting, DiscoveredJob, DiscoveryResult, JobScore)
+│   ├── resume_model.py     # ResumeContent schema — structured resume data the tailor agent produces
+│   ├── resume_renderer.py  # render_resume(): deterministic Jinja2 → LaTeX rendering (LLM never emits LaTeX)
+│   ├── startup.py          # Startup health checks (DB, migrations, LLM auth, scraper, pdflatex)
+│   ├── llm_client.py       # DEPRECATED standalone Gemini client — not imported, do not extend
 │   ├── jd_scraper.py       # Job description fetching
 │   └── latex_compiler.py   # PDF generation
+├── data/
+│   ├── master_resume.json  # Master resume content pool (source of truth for tailoring/scoring)
+│   ├── resume_template.tex.j2  # Jinja2 LaTeX template (<< >> / <% %> delimiters, | tex escaping)
+│   └── master.tex          # Legacy LaTeX resume, visual reference only
 └── migrations/versions/    # Alembic migrations
 ```
 
@@ -87,9 +96,13 @@ backend/services/resume-tailor/
 1. **JobDiscoveryAgent**: Parses search result HTML → extracts job listings (title, company, URL)
 2. **JobScoringAgent**: Compares job to resume → returns score 0-100
 3. **JobParsingAgent**: Extracts structured requirements from job description
-4. **ResumeTailorAgent**: Rewrites LaTeX resume sections to match job
+4. **ResumeTailorAgent**: Selects/rewords the most relevant subset of the master pool (`data/master_resume.json`) for a job — structured output against the `ResumeContent` schema, never raw LaTeX. Deterministic guardrails restore the header and cap content to one page; `core/resume_renderer.py` renders the result to always-compilable LaTeX.
 
-All agents use Google Gemini Pro via `llm_client.py`.
+All agents depend only on the `LLMProvider` interface in `core/llm_providers.py` (not a model SDK
+directly). The default engine is `ClaudeAgentProvider`, which runs on a **Claude subscription** via
+`claude-agent-sdk` + `CLAUDE_CODE_OAUTH_TOKEN` (no per-token billing); `GeminiProvider` is a fallback
+(`LLM_PROVIDER=gemini`). To swap engines, add an `LLMProvider` and wire it into
+`create_default_provider()` — agents stay unchanged.
 
 ## Key Workflows
 
@@ -112,8 +125,8 @@ All agents use Google Gemini Pro via `llm_client.py`.
 2. `POST /apply` creates background task
 3. Scraper fetches full job description
 4. JobParsingAgent extracts requirements
-5. ResumeTailorAgent tailors resume
-6. LaTeX compiler generates PDF
+5. ResumeTailorAgent selects/rewords content from `master_resume.json` (structured `ResumeContent`)
+6. `render_resume()` renders it to LaTeX; LaTeX compiler generates PDF
 7. Job status updated to "applied"
 
 ## Frontend Patterns
@@ -181,14 +194,19 @@ useEffect(() => {
 
 ### Backend (.env)
 ```
-GOOGLE_API_KEY=xxx          # Required - Gemini API
+LLM_PROVIDER=claude          # claude (default) | gemini
+CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...   # Required for claude; from `claude setup-token`
+CLAUDE_MODEL=sonnet          # sonnet | haiku | opus | claude-sonnet-4-6 ...
+GOOGLE_API_KEY=xxx           # Required only when LLM_PROVIDER=gemini
 DATABASE_URL=postgresql://postgres:postgres@postgres:5432/autocareer
 SCRAPER_SERVICE_URL=http://scraper:8001
-MASTER_RESUME_PATH=./data/master.tex
+MASTER_RESUME_JSON_PATH=./data/master_resume.json  # structured content pool used for tailoring/scoring
+MASTER_RESUME_PATH=./data/master.tex               # legacy reference; only the startup presence check reads it
 RATE_LIMIT_DELAY=0.2        # Seconds between job scrapes (default: 0.2)
 MAX_CONCURRENT_SOURCES=5    # Max parallel source scans (default: 5)
 MAX_CONCURRENT_JOBS=10      # Max parallel job scrapes per source (default: 10)
 ```
+> Never set `ANTHROPIC_API_KEY` — it shadows `CLAUDE_CODE_OAUTH_TOKEN` and bills pay-per-token. The `claude_auth_configured` startup check fails fast if it is present.
 
 ### Frontend (.env.local)
 ```
@@ -214,6 +232,9 @@ cd frontend && npm run dev
 
 ## Testing Notes
 
+- Run the suite from the repo-root `.venv` with `TESTING=true`; tests use `StubProvider`, so no LLM token is required:
+  `cd backend/services/resume-tailor && TESTING=true ../../../.venv/bin/python -m pytest tests/ -q`
 - Scraper may be blocked by some job sites - test with different URLs
 - AI responses are non-deterministic - verify output quality
-- PDF compilation requires valid LaTeX - check logs on failure
+- Claude calls run via the `claude` CLI subprocess (~3–13s each), so scans are slower than the old Gemini HTTP path
+- Generated LaTeX is always compilable (fixed template + escaping); pdflatex failures point at `data/resume_template.tex.j2` - check logs on failure

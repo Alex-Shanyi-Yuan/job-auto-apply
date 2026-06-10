@@ -21,7 +21,7 @@ Users configure job board URLs (sources), set a global filter, and click "Refres
 ### Sequence Diagram
 
 ```
-User                Frontend              Resume Tailor            Job Scraper           Gemini API          PostgreSQL
+User                Frontend              Resume Tailor            Job Scraper           LLM Engine          PostgreSQL
  │                     │                        │                       │                      │                  │
  │  1. Configure      │                        │                       │                      │                  │
  │     Sources        │                        │                       │                      │                  │
@@ -287,12 +287,12 @@ The resume tailoring workflow converts a generic job suggestion into a customize
 
 ### Overview
 
-User clicks "Apply" on a suggested job. The system fetches the full job description, extracts structured requirements using AI, rewrites the master resume's LaTeX sections to match the job, compiles to PDF, and updates job status to `applied`.
+User clicks "Apply" on a suggested job. The system fetches the full job description, extracts structured requirements using AI, has the AI select and reword the most relevant content from the master resume pool (`data/master_resume.json`) as structured data, renders it to LaTeX via a fixed Jinja2 template, compiles to PDF, and updates job status to `applied`.
 
 ### Sequence Diagram
 
 ```
-User              Frontend           Resume Tailor         Job Scraper        Gemini API         LaTeX         PostgreSQL
+User              Frontend           Resume Tailor         Job Scraper        LLM Engine         LaTeX         PostgreSQL
  │                   │                     │                     │                  │             │                │
  │  1. Click "Apply" │                     │                     │                  │             │                │
  │   on Job #42      │                     │                     │                  │             │                │
@@ -347,20 +347,20 @@ User              Frontend           Resume Tailor         Job Scraper        Ge
  │                   │                     │  8. Tailor resume   │                  │             │                │
  │                   │                     │     (ResumeTailorAgent)                │             │                │
  │                   │                     ├───────────────────────────────────────>│             │                │
- │                   │                     │  Prompt: "Rewrite these LaTeX sections │             │                │
- │                   │                     │           to match job requirements:   │             │                │
- │                   │                     │           {requirements}"              │             │                │
- │                   │                     │  Input: master.tex sections            │             │                │
+ │                   │                     │  Prompt: "Select + reword the most     │             │                │
+ │                   │                     │           relevant pool content for    │             │                │
+ │                   │                     │           this job (structured JSON)"  │             │                │
+ │                   │                     │  Input: master_resume.json pool + job  │             │                │
  │                   │                     │                     │                  │             │                │
- │                   │                     │  {tailored_sections: {                 │             │                │
- │                   │                     │    "experience": "\\item Led ML team...",              │                │
- │                   │                     │    "skills": "\\textbf{Python, PyTorch}",              │                │
- │                   │                     │  }}                 │                  │             │                │
+ │                   │                     │  ResumeContent {    │                  │             │                │
+ │                   │                     │    experience: [...most relevant...],  │             │                │
+ │                   │                     │    projects: [...], skills: [...]      │             │                │
+ │                   │                     │  }                  │                  │             │                │
  │                   │                     │<───────────────────────────────────────┤             │                │
  │                   │                     │                     │                  │             │                │
- │                   │                     │  9. Merge sections  │                  │             │                │
- │                   │                     │     into master.tex │                  │             │                │
- │                   │                     │     (string replace)│                  │             │                │
+ │                   │                     │  9. Enforce budget +│                  │             │                │
+ │                   │                     │     render via Jinja2 template         │             │                │
+ │                   │                     │     (render_resume) │                  │             │                │
  │                   │                     │                     │                  │             │                │
  │                   │                     │  10. Compile to PDF │                  │             │                │
  │                   │                     ├────────────────────────────────────────────────────>│                │
@@ -456,33 +456,18 @@ User              Frontend           Resume Tailor         Job Scraper        Ge
 
 **Step 8: Generate tailored resume content**
 
-`ResumeTailorAgent` rewrites master resume sections:
+`ResumeTailorAgent` selects and rewords content from the master pool:
 
-- **AI Prompt**: "Rewrite the following LaTeX resume sections to emphasize skills and experiences relevant to these job requirements: {requirements}. Maintain LaTeX formatting."
+- **AI Prompt**: select the most relevant experiences/projects, order by relevance, reword bullets to mirror the job's keywords (truthfully, X-Y-Z style), never fabricate, plain text only
 - **Input**:
-  - Master resume sections (experience, skills, projects)
-  - Extracted requirements
-- **Output**: Rewritten LaTeX code
-  ```latex
-  {
-    "experience": "\\item Led machine learning team of 5 engineers, specializing in deep learning models using PyTorch for production systems...",
-    "skills": "\\textbf{Languages:} Python (8 years), C++\\\\\\textbf{Frameworks:} PyTorch, TensorFlow, Scikit-learn"
-  }
-  ```
+  - Full master content pool (`data/master_resume.json` loaded as `ResumeContent`)
+  - Parsed job posting (company, title, summary, key requirements)
+- **Output**: a validated `ResumeContent` object (structured output against the Pydantic schema — never LaTeX)
 
-**Step 9: Merge tailored sections**
+**Step 9: Enforce budget and render to LaTeX**
 
-- Load `master.tex` template from disk
-- String replacement: Replace placeholders with tailored content
-  ```latex
-  % Before
-  \section{Experience}
-  {{EXPERIENCE_SECTION}}
-
-  % After
-  \section{Experience}
-  \item Led machine learning team of 5 engineers...
-  ```
+- `_enforce_budget()`: restore the header verbatim from the master, cap to 5 experiences / 5 projects / bullet limits for a one-page result
+- `render_resume()` (`core/resume_renderer.py`): render the content through the fixed Jinja2 template `data/resume_template.tex.j2`, with every value LaTeX-escaped — the output is always compilable
 - Write to `./output/job_42_resume.tex`
 
 #### Phase 4: PDF Compilation
@@ -522,13 +507,13 @@ User              Frontend           Resume Tailor         Job Scraper        Ge
    - Status: `failed`
    - Error: "Failed to fetch job description: Timeout after 30s"
 
-2. **AI extraction fails** (malformed HTML, API error)
+2. **AI extraction fails** (malformed HTML, LLM error/timeout)
    - Status: `failed`
-   - Error: "Failed to parse requirements: Gemini API error"
+   - Error: "Failed to parse job description: ..."
 
-3. **Resume tailoring fails** (AI hallucination, invalid LaTeX)
-   - Status: `failed`
-   - Error: "Failed to tailor resume: LaTeX syntax error on line 42"
+3. **Resume tailoring fails** (LLM output violates the `ResumeContent` schema, LLM timeout)
+   - Status: `failed` after `MAX_RETRIES` attempts (retries surface as SSE `RETRY_ATTEMPT` events)
+   - Error: validation or provider error message
 
 4. **PDF compilation fails** (TeX Live error)
    - Status: `failed`

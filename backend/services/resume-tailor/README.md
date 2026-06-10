@@ -13,7 +13,9 @@ uvicorn server:app --reload --port 8000
 ```
 
 ```bash
-GOOGLE_API_KEY=your_gemini_api_key_here
+LLM_PROVIDER=claude                              # claude (default) | gemini (legacy fallback)
+CLAUDE_CODE_OAUTH_TOKEN=your_subscription_token  # from `claude setup-token`
+CLAUDE_MODEL=sonnet                              # sonnet (default) | haiku | opus | full id e.g. claude-sonnet-4-6
 DATABASE_BACKEND=hybrid
 SQLITE_DATABASE_URL=sqlite:///./data/autocareer.db
 POSTGRES_DATABASE_URL=postgresql://postgres:postgres@postgres:5432/autocareer
@@ -28,7 +30,11 @@ MAX_CONCURRENT_SOURCES=5    # Max parallel source scans (default: 5)
 MAX_CONCURRENT_JOBS=10      # Max parallel job scrapes per source (default: 10)
 ```
 
-Get your Gemini API key from: https://makersuite.google.com/app/apikey
+The default LLM engine is Claude via the [`claude-agent-sdk`](https://pypi.org/project/claude-agent-sdk/), authenticated by a Claude Pro/Max **subscription** rather than a pay-per-token API key. Generate a token once on the host with `claude setup-token` and put it in `.env` as `CLAUDE_CODE_OAUTH_TOKEN`. Inference then draws from your Claude subscription with no per-token billing.
+
+> **Do not set `ANTHROPIC_API_KEY`** in the tailor process. It shadows `CLAUDE_CODE_OAUTH_TOKEN` and silently switches to pay-per-token billing. The `claude_auth_configured` startup health check fails fast if it is present.
+
+To use the legacy Gemini fallback instead, set `LLM_PROVIDER=gemini` and provide a `GOOGLE_API_KEY` (get one from https://makersuite.google.com/app/apikey).
 
 ## API Overview
 
@@ -64,7 +70,7 @@ See [spec.md](spec.md) for complete API documentation.
 
 ### Startup health checks
 
-On service startup, checks run in this order: database connectivity, migrations baseline, master resume presence, Gemini API key, scraper reachability, and pdflatex availability.  
+On service startup, checks run in this order: database connectivity, migrations baseline, master resume presence, Claude auth (`CLAUDE_CODE_OAUTH_TOKEN` present and `ANTHROPIC_API_KEY` absent) plus `claude` CLI availability, scraper reachability, and pdflatex availability.  
 `STARTUP_FAIL_FAST` controls whether critical failures stop startup; `STARTUP_BLOCK_APPLY_ON_CRITICAL` controls whether `POST /apply` is blocked (503) when critical checks fail.
 
 ## AI Agents
@@ -76,7 +82,9 @@ The service uses four specialized AI agents:
 | `JobDiscoveryAgent` | Extracts job listings from search result HTML |
 | `JobScoringAgent`   | Scores job-resume match (0-100)               |
 | `JobParsingAgent`   | Extracts requirements from job descriptions   |
-| `ResumeTailorAgent` | Rewrites resume sections for each job         |
+| `ResumeTailorAgent` | Selects/rewords the most relevant content from the master pool per job (structured `ResumeContent`, never LaTeX) |
+
+All agents call the LLM through `core/llm_providers.py`. Structured output is requested via the SDK's `output_format` JSON schema, returned on `ResultMessage.structured_output`, and validated into the Pydantic models in `core/models.py`.
 
 ## Project Structure
 
@@ -85,13 +93,18 @@ resume-tailor/
 ├── core/                      # Core modules
 │   ├── agents.py             # AI Agents (Discovery, Scoring, Parsing, Tailoring)
 │   ├── jd_scraper.py         # Job description fetching
-│   ├── llm_client.py         # Gemini API integration
-│   ├── models.py             # Data models
+│   ├── llm_providers.py      # Active LLM layer: LLMProvider ABC + ClaudeAgentProvider (default), GeminiProvider (fallback), StubProvider, create_default_provider()
+│   ├── llm_client.py         # DEPRECATED legacy Gemini client (no longer imported; see llm_providers.py)
+│   ├── models.py             # Pydantic models for structured LLM output
+│   ├── resume_model.py       # ResumeContent schema (structured resume data)
+│   ├── resume_renderer.py    # Deterministic Jinja2 → LaTeX rendering
 │   └── latex_compiler.py     # PDF compilation
 ├── migrations/               # Alembic database migrations
 │   └── versions/
 ├── data/
-│   └── master.tex            # Your master resume template
+│   ├── master_resume.json    # Your master resume content pool (source of truth)
+│   ├── resume_template.tex.j2 # Jinja2 LaTeX template (Jake Gutierrez layout)
+│   └── master.tex            # Legacy LaTeX resume (visual reference only)
 ├── output/                   # Generated PDFs and .tex files
 ├── server.py                 # FastAPI server (web mode)
 ├── database.py               # SQLModel database layer
@@ -122,7 +135,10 @@ alembic upgrade head
 
 | Variable                | Description                                               | Default                                               |
 | ----------------------- | --------------------------------------------------------- | ----------------------------------------------------- |
-| `GOOGLE_API_KEY`        | Gemini API key                                            | Required                                              |
+| `LLM_PROVIDER`          | LLM engine (`claude`, `gemini`)                           | `claude`                                              |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Claude subscription token from `claude setup-token` (required when `LLM_PROVIDER=claude`) | Required          |
+| `CLAUDE_MODEL`          | Claude model (`sonnet`, `haiku`, `opus`, or full id)      | `sonnet`                                              |
+| `GOOGLE_API_KEY`        | Gemini API key (required only when `LLM_PROVIDER=gemini`) | —                                                     |
 | `DATABASE_BACKEND`      | Active backend (`postgres`, `sqlite`, `hybrid`)           | `postgres`                                            |
 | `SQLITE_DATABASE_URL`   | SQLite connection string                                  | `sqlite:///./data/autocareer.db`                      |
 | `POSTGRES_DATABASE_URL` | PostgreSQL connection string                              | `postgresql://user:password@postgres:5432/autocareer` |
@@ -130,7 +146,8 @@ alembic upgrade head
 | `SYNC_ON_BOOT`          | Reconcile at startup when Postgres is reachable           | `true`                                                |
 | `SYNC_ON_SHUTDOWN`      | Reconcile at graceful shutdown when Postgres is reachable | `true`                                                |
 | `SCRAPER_SERVICE_URL`   | Scraper service URL                                       | `http://scraper:8001`                                 |
-| `MASTER_RESUME_PATH`    | Path to LaTeX template                                    | `./data/master.tex`                                   |
+| `MASTER_RESUME_JSON_PATH` | Path to the structured master resume pool (tailoring/scoring) | `./data/master_resume.json`                     |
+| `MASTER_RESUME_PATH`    | Legacy LaTeX resume (startup presence check only)         | `./data/master.tex`                                   |
 | `MAX_RETRIES`           | Retry attempts for tailoring/hook failures                | `3`                                                   |
 | `STREAM_QUEUE_WAIT_TIMEOUT_SECONDS` | Max wait for active job stream queue         | `1.0`                                                 |
 | `STREAM_QUEUE_WAIT_INTERVAL_SECONDS` | Poll interval while waiting for stream queue   | `0.05`                                                |
@@ -171,9 +188,13 @@ docker-compose run --rm tailor --url "https://..." --output "GoogleSRE"
 
 Use Docker - it includes TeX Live automatically.
 
-### "GOOGLE_API_KEY not found"
+### "claude CLI not found"
 
-Make sure you created `.env` (not `.env.example`) with your actual key.
+Use Docker - the `tailor` image installs Node.js and `@anthropic-ai/claude-code` so the SDK's `claude` CLI subprocess is available in-container. When running outside Docker, install it with `npm install -g @anthropic-ai/claude-code`.
+
+### "Claude auth not configured" / `claude_auth_configured` check fails
+
+Make sure you created `.env` (not `.env.example`) with a valid `CLAUDE_CODE_OAUTH_TOKEN` (run `claude setup-token` on the host to generate one). Also ensure `ANTHROPIC_API_KEY` is **not** set in the tailor process - it shadows the subscription token and fails this check. If `LLM_PROVIDER=gemini`, set `GOOGLE_API_KEY` instead.
 
 ### "LaTeX compilation failed"
 

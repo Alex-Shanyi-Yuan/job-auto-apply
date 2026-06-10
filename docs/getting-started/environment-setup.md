@@ -16,9 +16,54 @@ This file is loaded by the `tailor` service (main backend) on startup. The front
 
 ## Required Variables
 
+AutoCareer's AI agents (job discovery, scoring, parsing, resume tailoring) run on **Claude** by default, authenticated with a **Claude Pro/Max subscription** — there is no per-token API billing. Gemini remains available as a legacy fallback.
+
+### CLAUDE_CODE_OAUTH_TOKEN
+
+**Required** (default Claude path) — Authenticates the Claude Agent SDK against your Claude subscription.
+
+```bash
+CLAUDE_CODE_OAUTH_TOKEN=your_oauth_token_here
+```
+
+**How to get your token:**
+
+1. Install the Claude CLI (`@anthropic-ai/claude-code`) on your host machine.
+2. Run `claude setup-token` once and complete the browser login with your Claude Pro/Max account.
+3. Copy the generated token into your `.env` file as `CLAUDE_CODE_OAUTH_TOKEN`.
+
+Inference is billed against your Claude subscription, so there is no per-token API cost.
+
+> **Never set `ANTHROPIC_API_KEY`.** It shadows `CLAUDE_CODE_OAUTH_TOKEN` and switches billing to pay-per-token. The `tailor` service runs a `claude_auth_configured` startup check that fails fast if `ANTHROPIC_API_KEY` is present.
+
+> **Note:** The `tailor` Docker image installs Node and `@anthropic-ai/claude-code`; the Claude Agent SDK spawns the `claude` CLI as a subprocess, so no separate setup is needed inside the container.
+
+### LLM_PROVIDER
+
+Selects which LLM engine the agents use.
+
+```bash
+LLM_PROVIDER=claude  # Options: claude | gemini
+```
+
+| Value | Description |
+|-------|-------------|
+| `claude` | Claude via the Claude Agent SDK (default). Requires `CLAUDE_CODE_OAUTH_TOKEN`. |
+| `gemini` | Google Gemini API (legacy fallback). Requires `GOOGLE_API_KEY`. |
+
+### CLAUDE_MODEL
+
+Selects the Claude model used by the agents (only relevant when `LLM_PROVIDER=claude`).
+
+```bash
+CLAUDE_MODEL=sonnet  # Options: sonnet (default) | haiku | opus | full model id
+```
+
+**Default:** `sonnet`. You may also pass a fully qualified model id.
+
 ### GOOGLE_API_KEY
 
-**Required** — Powers all AI agents (job discovery, scoring, parsing, resume tailoring).
+**Required only when `LLM_PROVIDER=gemini`** (legacy fallback) — Powers all AI agents via the Google Gemini API.
 
 ```bash
 GOOGLE_API_KEY=your_api_key_here
@@ -30,8 +75,6 @@ GOOGLE_API_KEY=your_api_key_here
 2. Sign in with your Google account
 3. Click "Create API Key"
 4. Copy the key and paste it into your `.env` file
-
-**Note:** Free tier includes 60 requests/minute for Gemini 1.5 Pro. Monitor usage in the AI Studio dashboard.
 
 ## Database Configuration
 
@@ -134,29 +177,33 @@ The `tailor` service calls this URL to fetch job page HTML via headless browser 
 SCRAPER_SERVICE_URL=http://localhost:8001
 ```
 
-## Resume Template
+## Resume Content
 
-### MASTER_RESUME_PATH
+### MASTER_RESUME_JSON_PATH
+
+```bash
+MASTER_RESUME_JSON_PATH=./data/master_resume.json
+```
+
+**Path:** Relative to `/app` inside the `tailor` Docker container.
+
+**On host system:** `backend/services/resume-tailor/data/master_resume.json`
+
+**What it is:** your master resume as **structured JSON** — the full pool of header, education, skills, and every experience/project with all bullets. The `ResumeTailorAgent` selects and rewords the most relevant subset per job (validated `ResumeContent`, see `core/resume_model.py`), and `core/resume_renderer.py` renders it to LaTeX via the Jinja2 template `data/resume_template.tex.j2`. The LLM never writes LaTeX.
+
+**Customization:**
+
+1. Edit `master_resume.json` with your experience, skills, education (plain text — special characters are escaped automatically)
+2. Layout changes go in `data/resume_template.tex.j2`
+3. Restart `tailor` service: `docker-compose restart tailor`
+
+### MASTER_RESUME_PATH (legacy)
 
 ```bash
 MASTER_RESUME_PATH=./data/master.tex
 ```
 
-**Path:** Relative to `/app` inside the `tailor` Docker container.
-
-**On host system:** `/Users/alexyuan/Documents/job-auto-apply/backend/services/resume-tailor/data/master.tex`
-
-**Template structure:**
-- LaTeX format (`.tex` file)
-- Sections: `\section{Experience}`, `\section{Education}`, `\section{Skills}`
-- The `ResumeTailorAgent` rewrites sections to match job requirements
-- Compiled to PDF using TeX Live (installed in Docker image)
-
-**Customization:**
-
-1. Edit `master.tex` with your experience, skills, education
-2. Test compilation: `docker-compose exec tailor pdflatex -output-directory=/app/data /app/data/master.tex`
-3. Restart `tailor` service: `docker-compose restart tailor`
+The legacy LaTeX resume. It is **not** used for tailoring anymore — it is kept as the visual reference for the template, and the `master_resume_presence` startup check still verifies it exists.
 
 ## Performance Tuning
 
@@ -198,20 +245,22 @@ MAX_CONCURRENT_JOBS=10  # Max parallel job scrapes per source
 
 **Default:** `10`
 
-**Trade-off:** Higher values = faster source processing, but higher Gemini API quota consumption.
+**Trade-off:** Higher values = faster source processing and more concurrent inference load.
 
 ## LLM Configuration
+
+The LLM **provider** is selected by [`LLM_PROVIDER`](#llm_provider) (`claude` default, `gemini` fallback). The variable below only toggles stub/offline test modes — it does **not** select the provider.
 
 ### RESUME_TAILOR_LLM_MODE
 
 ```bash
-RESUME_TAILOR_LLM_MODE=gemini  # Options: gemini | stub | test | offline
+RESUME_TAILOR_LLM_MODE=  # Options: stub | test | offline (unset = use the real provider)
 ```
 
 | Mode | Description | Use Case |
 |------|-------------|----------|
-| `gemini` | Google Gemini API (default) | Production, real AI responses |
-| `stub` | Mock responses (hardcoded JSON) | Development, no API key needed |
+| _unset_ (or any other value) | Use the real provider chosen by `LLM_PROVIDER` | Production, real AI responses |
+| `stub` | Mock responses (hardcoded JSON) | Development, no provider auth needed |
 | `test` | Deterministic mock data | Automated testing |
 | `offline` | Same as stub | Offline development |
 
@@ -224,8 +273,8 @@ RESUME_TAILOR_LLM_MODE=gemini  # Options: gemini | stub | test | offline
 ```
 
 **When to use stub/test/offline:**
-- API key not available
-- Avoiding quota consumption during UI development
+- Provider authentication not available
+- Avoiding inference load during UI development
 - Testing error handling with predictable outputs
 
 **Note:** Stub mode jobs will have generic titles/companies like "Software Engineer" / "Tech Corp".
@@ -260,8 +309,13 @@ NEXT_PUBLIC_API_URL=http://your-domain.com:8000
 
 ```bash
 # AI Configuration
-GOOGLE_API_KEY=AIzaSyC1234567890abcdefghijklmnopqrstuvwxyz
-RESUME_TAILOR_LLM_MODE=gemini
+LLM_PROVIDER=claude
+CLAUDE_CODE_OAUTH_TOKEN=your_oauth_token_here
+CLAUDE_MODEL=sonnet
+# RESUME_TAILOR_LLM_MODE is only for stub/test/offline modes; leave unset to use the real provider.
+
+# Legacy Gemini fallback (only used when LLM_PROVIDER=gemini)
+# GOOGLE_API_KEY=AIzaSyC1234567890abcdefghijklmnopqrstuvwxyz
 
 # Database Configuration
 DATABASE_BACKEND=hybrid
@@ -275,7 +329,8 @@ SYNC_ON_SHUTDOWN=true
 SCRAPER_SERVICE_URL=http://scraper:8001
 
 # Resume Configuration
-MASTER_RESUME_PATH=./data/master.tex
+MASTER_RESUME_JSON_PATH=./data/master_resume.json   # structured content pool (tailoring/scoring)
+MASTER_RESUME_PATH=./data/master.tex                # legacy reference; startup presence check only
 
 # Performance Tuning
 RATE_LIMIT_DELAY=0.2
@@ -291,15 +346,24 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
 
 ## Troubleshooting
 
-### Missing API Key
+### Missing or Misconfigured LLM Auth
 
-**Symptom:**
+**Symptom (Claude, default):** the `tailor` startup `claude_auth_configured` check fails, or agents cannot authenticate.
+
+**Solution:**
+1. Verify `.env` file exists at repository root
+2. Check the token is set: `cat .env | grep CLAUDE_CODE_OAUTH_TOKEN`
+3. Ensure `ANTHROPIC_API_KEY` is **not** set — it shadows the OAuth token and is rejected by the startup check: `cat .env | grep ANTHROPIC_API_KEY` (should return nothing)
+4. Regenerate the token on the host with `claude setup-token` if needed
+5. Restart services: `docker-compose restart tailor`
+
+**Symptom (Gemini fallback):**
 ```
 Error: GOOGLE_API_KEY environment variable not set
 ```
 
 **Solution:**
-1. Verify `.env` file exists at repository root
+1. Confirm `LLM_PROVIDER=gemini` is set
 2. Check API key is set: `cat .env | grep GOOGLE_API_KEY`
 3. Restart services: `docker-compose restart tailor`
 
@@ -393,31 +457,29 @@ httpx.ConnectError: [Errno 61] Connection refused (scraper:8001)
    docker-compose logs scraper
    ```
 
-### Resume Template Not Found
+### Master Resume Not Found
 
 **Symptom:**
 ```
-FileNotFoundError: [Errno 2] No such file or directory: './data/master.tex'
+FileNotFoundError: Master resume JSON not found: ./data/master_resume.json
 ```
+(or `./data/master.tex` from the startup presence check)
 
 **Solutions:**
 
-1. **Verify file exists:**
+1. **Verify files exist:**
    ```bash
+   ls -la backend/services/resume-tailor/data/master_resume.json
    ls -la backend/services/resume-tailor/data/master.tex
    ```
 
-2. **Check path in .env:**
+2. **Check paths in .env:**
    ```bash
-   cat .env | grep MASTER_RESUME_PATH
-   # Should be: ./data/master.tex
+   cat .env | grep MASTER_RESUME
+   # MASTER_RESUME_JSON_PATH should be: ./data/master_resume.json
    ```
 
-3. **Create template if missing:**
-   ```bash
-   cp backend/services/resume-tailor/data/master.tex.example \
-      backend/services/resume-tailor/data/master.tex
-   ```
+3. **If the JSON fails validation** (Pydantic error on startup/apply): the error names the exact field — see `core/resume_model.py` for the schema constraints (no empty strings, bullets ≤ 400 chars, every experience needs at least one role).
 
 ### Frontend Cannot Reach Backend
 

@@ -6,10 +6,27 @@ from sqlmodel import Session, create_engine, select
 from sqlmodel.pool import StaticPool
 from database import SQLModel, Job, JobStage, utcnow, get_session
 from core.event_bus import JobEvent, EventType
+from core.resume_model import ResumeContent, Header, ExperienceEntry, Role, ProjectEntry
 import server
 from server import app
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+
+
+def _stub_resume() -> ResumeContent:
+    """A small valid ResumeContent for exercising the tailor -> render path."""
+    return ResumeContent(
+        header=Header(name="Stub Candidate", email="stub@example.com", links=[]),
+        experience=[
+            ExperienceEntry(
+                company="Acme",
+                location="Remote",
+                roles=[Role(title="Software Engineer", dates="2022 -- Present")],
+                bullets=["Built automation tooling."],
+            )
+        ],
+        projects=[ProjectEntry(name="Proj", tech=["Python"], bullets=["Implemented a fixture."])],
+    )
 
 def test_get_jobs_includes_stages(session: Session, client: TestClient):
     """Test GET /jobs includes stages for all jobs."""
@@ -624,11 +641,11 @@ async def test_process_application_creates_queue_before_first_emit(session: Sess
             )
         ),
     )
-    monkeypatch.setattr(server, "load_master_resume", lambda _: "\\begin{document}master\\end{document}")
+    monkeypatch.setattr(server, "load_master_resume_content", lambda _: _stub_resume())
     monkeypatch.setattr(
         server,
         "ResumeTailorAgent",
-        lambda: SimpleNamespace(tailor=lambda *_: "\\begin{document}tailored\\end{document}"),
+        lambda: SimpleNamespace(tailor=lambda *_: _stub_resume()),
     )
     monkeypatch.setattr(server, "compile_pdf", lambda **_: "./output/acme.pdf")
     monkeypatch.setattr(server.event_bus, "create_job_queue", create_job_queue)
@@ -683,11 +700,11 @@ async def test_process_application_emits_pipeline_events_on_success(session: Ses
             )
         ),
     )
-    monkeypatch.setattr(server, "load_master_resume", lambda _: "\\begin{document}master\\end{document}")
+    monkeypatch.setattr(server, "load_master_resume_content", lambda _: _stub_resume())
     monkeypatch.setattr(
         server,
         "ResumeTailorAgent",
-        lambda: SimpleNamespace(tailor=lambda *_: "\\begin{document}tailored\\end{document}"),
+        lambda: SimpleNamespace(tailor=lambda *_: _stub_resume()),
     )
     monkeypatch.setattr(server, "compile_pdf", lambda **_: "./output/acme.pdf")
     monkeypatch.setattr(server.event_bus, "emit", capture_emit)
@@ -804,11 +821,11 @@ async def test_process_application_fails_when_parse_pre_hook_denies(session: Ses
     monkeypatch.setattr(server.httpx, "AsyncClient", FakeAsyncClient)
     monkeypatch.setattr(server, "AgentHookRunner", DenyParsingHookRunner)
     monkeypatch.setattr(server, "JobParsingAgent", lambda: SimpleNamespace(parse=parse_job))
-    monkeypatch.setattr(server, "load_master_resume", lambda _: "\\begin{document}master\\end{document}")
+    monkeypatch.setattr(server, "load_master_resume_content", lambda _: _stub_resume())
     monkeypatch.setattr(
         server,
         "ResumeTailorAgent",
-        lambda: SimpleNamespace(tailor=lambda *_: "\\begin{document}tailored\\end{document}"),
+        lambda: SimpleNamespace(tailor=lambda *_: _stub_resume()),
     )
     compile_pdf_calls = {"count": 0}
 
@@ -873,7 +890,7 @@ async def test_process_application_retries_tailoring_then_succeeds(session: Sess
             )
         ),
     )
-    monkeypatch.setattr(server, "load_master_resume", lambda _: "\\begin{document}master\\end{document}")
+    monkeypatch.setattr(server, "load_master_resume_content", lambda _: _stub_resume())
 
     attempts = {"count": 0}
 
@@ -881,7 +898,7 @@ async def test_process_application_retries_tailoring_then_succeeds(session: Sess
         attempts["count"] += 1
         if attempts["count"] == 1:
             raise RuntimeError("transient tailor failure")
-        return "\\begin{document}tailored\\end{document}"
+        return _stub_resume()
 
     monkeypatch.setattr(server, "ResumeTailorAgent", lambda: SimpleNamespace(tailor=flaky_tailor))
     monkeypatch.setattr(server, "compile_pdf", lambda **_: "./output/acme.pdf")
@@ -941,11 +958,18 @@ async def test_process_application_marks_failed_when_hook_denies_after_retries(s
             )
         ),
     )
-    monkeypatch.setattr(server, "load_master_resume", lambda _: "\\begin{document}master\\end{document}")
+    monkeypatch.setattr(server, "load_master_resume_content", lambda _: _stub_resume())
     monkeypatch.setattr(
         server,
         "ResumeTailorAgent",
-        lambda: SimpleNamespace(tailor=lambda *_: "```latex\n\\begin{document}bad\\end{document}\n```"),
+        lambda: SimpleNamespace(tailor=lambda *_: _stub_resume()),
+    )
+    # Force the rendered LaTeX to contain a code fence so the post-tailor
+    # validation hook denies it (the LLM no longer emits LaTeX directly).
+    monkeypatch.setattr(
+        server,
+        "render_resume",
+        lambda _c: "```latex\n\\begin{document}bad\\end{document}\n```",
     )
     compile_pdf_mock = AsyncMock()
     monkeypatch.setattr(server, "compile_pdf", compile_pdf_mock)

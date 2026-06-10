@@ -2,92 +2,103 @@
 
 ## Overview
 
-The Resume Tailoring feature is AutoCareer's intelligent resume customization pipeline that automatically adapts your master resume to match specific job postings. Using AI agents and LaTeX processing, it analyzes job requirements, rewrites resume content to highlight relevant experience, and generates professional PDF resumes ready for submission.
+The Resume Tailoring feature is AutoCareer's intelligent resume customization pipeline that automatically adapts your master resume to match specific job postings. The master resume lives as **structured JSON data** (a pool of every experience, project, and skill). For each job, an AI agent selects and rewords the most relevant subset, and a deterministic renderer turns the result into a compilable LaTeX document and a professional PDF.
 
-## LaTeX Workflow
+## Structured Content Pipeline
 
-AutoCareer uses **LaTeX** as the resume format for several key reasons:
-
-1. **Professional typesetting** – Superior to Word or plain text formatting
-2. **Precise control** – Consistent layout, fonts, spacing across all generated resumes
-3. **Version control friendly** – Plain text files that work well with Git
-4. **Programmatic manipulation** – Easy to parse, modify sections, and recompile
+The LLM **never writes LaTeX**. It only produces validated, structured data (`ResumeContent`); a fixed Jinja2 template renders that data to LaTeX with every value escaped. This eliminates the unbalanced-brace / unescaped-character failure class of the old "ask the LLM for a LaTeX document" approach, and guarantees ATS-parsable output.
 
 ### Pipeline Overview
 
 ```
-master.tex (your base resume)
+master_resume.json (your full content pool)
+    ↓  load_master_resume_content() → ResumeContent (Pydantic-validated)
+JobParsingAgent (extracts job requirements → JobPosting)
     ↓
-JobParsingAgent (extracts job requirements)
-    ↓
-ResumeTailorAgent (AI rewrites content to match job)
-    ↓
-Tailored LaTeX code
+ResumeTailorAgent (AI selects + rewords the most relevant subset → ResumeContent)
+    ↓  _enforce_budget() (hard one-page caps, header restored verbatim)
+render_resume() (Jinja2 template + LaTeX escaping → always-compilable LaTeX)
     ↓
 pdflatex (compiles to PDF)
     ↓
 Resume_CompanyName_JobTitle_2024-04-04_abc123.pdf
 ```
 
-### Master Resume Template
+### Key Files
 
-**Location:** `backend/services/resume-tailor/data/master.tex`
+| File | Role |
+| --- | --- |
+| `backend/services/resume-tailor/data/master_resume.json` | **Source of truth.** Your full content pool: header, education, skills, summary, every experience and project with all bullets. |
+| `backend/services/resume-tailor/core/resume_model.py` | Pydantic models (`ResumeContent`, `ExperienceEntry`, `ProjectEntry`, …) with field constraints (no empty strings, bounded lengths). |
+| `backend/services/resume-tailor/core/resume_renderer.py` | `render_resume(content) -> str` — deterministic LaTeX rendering with escaping. |
+| `backend/services/resume-tailor/data/resume_template.tex.j2` | Jinja2 LaTeX template (Jake Gutierrez resume layout). |
+| `backend/services/resume-tailor/data/master.tex` | Legacy LaTeX resume, kept as the visual reference for the template. Not used by the tailoring pipeline (the startup `master_resume_presence` check still looks for it via `MASTER_RESUME_PATH`). |
 
-This is your **canonical resume** – the source of truth containing:
-- Complete work history
-- All skills and technologies you've used
-- All projects and achievements
-- Education and certifications
+### The Master Resume Pool (`master_resume.json`)
 
-**Key Characteristics:**
-- Written in LaTeX (`.tex` file)
-- Should be comprehensive, not tailored
-- 1-2 pages maximum (AI will condense if needed)
-- Uses standard LaTeX commands (`\section`, `\textbf`, `\itemize`, etc.)
+**Location:** `backend/services/resume-tailor/data/master_resume.json` (configurable via `MASTER_RESUME_JSON_PATH`)
 
-**Example Structure:**
-```latex
-\documentclass[11pt,a4paper]{article}
-\usepackage[utf8]{inputenc}
-\usepackage{geometry}
-\geometry{margin=0.75in}
+This is your **canonical resume content** – comprehensive, not tailored:
 
-\begin{document}
+- Complete work history (one entry per company; multiple roles per company supported)
+- All skills, grouped by category
+- All projects with tech tags and bullets
+- Education and header (name, phone, email, links, citizenship)
 
-\section*{John Doe}
-\textbf{Senior Software Engineer} \\
-john.doe@email.com | (555) 123-4567 | linkedin.com/in/johndoe
+**Example structure:**
 
-\section*{Professional Summary}
-Experienced software engineer with 8 years in backend development,
-specializing in distributed systems, cloud infrastructure, and API design.
-
-\section*{Skills}
-\textbf{Languages:} Python, Go, TypeScript, Java \\
-\textbf{Frameworks:} FastAPI, Django, React, Node.js \\
-\textbf{Cloud:} AWS (EC2, S3, Lambda), GCP, Docker, Kubernetes
-
-\section*{Experience}
-
-\textbf{Senior Software Engineer} - TechCorp (2020 - Present)
-\begin{itemize}
-    \item Led migration of monolithic app to microservices, reducing latency by 40\%
-    \item Designed and implemented REST API serving 10M+ requests/day
-    \item Mentored 3 junior engineers on system design and best practices
-\end{itemize}
-
-\textbf{Software Engineer} - StartupXYZ (2018 - 2020)
-\begin{itemize}
-    \item Built real-time data processing pipeline using Python and Kafka
-    \item Reduced infrastructure costs by 30\% through cloud optimization
-\end{itemize}
-
-\section*{Education}
-\textbf{B.S. Computer Science} - University of Technology (2018) \\
-GPA: 3.8/4.0
-
-\end{document}
+```json
+{
+  "header": {
+    "name": "John Doe",
+    "phone": "(555) 123-4567",
+    "email": "john.doe@email.com",
+    "links": [
+      { "label": "linkedin.com/in/johndoe", "url": "https://linkedin.com/in/johndoe" },
+      { "label": "github.com/johndoe", "url": "https://github.com/johndoe" }
+    ],
+    "citizenship": "US Citizen"
+  },
+  "education": [
+    {
+      "institution": "University of Technology",
+      "location": "City, ST",
+      "degree": "B.S. Computer Science",
+      "dates": "2014 -- 2018",
+      "highlights": ["GPA: 3.8/4.0"]
+    }
+  ],
+  "skills": [
+    { "category": "Languages", "items": ["Python", "Go", "TypeScript"] },
+    { "category": "Frameworks", "items": ["FastAPI", "React"] }
+  ],
+  "summary": "Experienced software engineer ...",
+  "experience": [
+    {
+      "company": "TechCorp",
+      "location": "Remote",
+      "roles": [
+        { "title": "Senior Software Engineer", "dates": "2020 -- Present" },
+        { "title": "Software Engineer", "dates": "2018 -- 2020" }
+      ],
+      "bullets": [
+        "Led migration of monolithic app to microservices, reducing latency by 40%",
+        "Designed and implemented REST API serving 10M+ requests/day"
+      ]
+    }
+  ],
+  "projects": [
+    {
+      "name": "AutoCareer",
+      "tech": ["Python", "FastAPI", "Next.js"],
+      "bullets": ["Built a self-hosted job application automation platform"],
+      "link": "https://github.com/johndoe/autocareer"
+    }
+  ]
+}
 ```
+
+**Validation:** the file is parsed into `ResumeContent` at load time. Empty bullets, missing required fields, or over-long entries are rejected with a clear Pydantic error (bullets ≤ 400 chars, skill items ≤ 80 chars, etc.). Plain text only — no LaTeX commands needed; special characters (`&`, `%`, `#`, …) are escaped automatically at render time.
 
 ## Agent Roles
 
@@ -101,7 +112,7 @@ The tailoring pipeline uses two specialized AI agents:
 
 **What it does:**
 1. Takes raw job description text (HTML cleaned to plain text)
-2. Uses Google Gemini Pro to analyze the content
+2. Uses Claude via the `claude-agent-sdk` (default engine; Gemini is a legacy fallback) to analyze the content
 3. Extracts key information into a structured `JobPosting` object:
    - Company name
    - Job title
@@ -136,28 +147,30 @@ class JobPosting:
 ```
 
 **Why This Matters:**
-Raw job descriptions are often verbose and unstructured. The parsing agent distills them into actionable requirements that the tailoring agent can use to rewrite the resume.
+Raw job descriptions are often verbose and unstructured. The parsing agent distills them into actionable requirements that the tailoring agent can use to select and reword resume content.
 
 ### ResumeTailorAgent
 
-**Purpose:** Rewrite the master resume to highlight relevant experience for a specific job.
+**Purpose:** Select and reword the most relevant content from the master pool for a specific job.
 
 **Located in:** `backend/services/resume-tailor/core/agents.py`
 
 **What it does:**
-1. Takes the master LaTeX resume and the parsed job posting
-2. Analyzes which experiences, skills, and achievements align with the job requirements
-3. Rewrites resume content to:
-   - Emphasize relevant experience
-   - Highlight matching skills
-   - Tailor the professional summary to the role
-   - Reorder and rephrase bullet points for maximum impact
-4. Preserves **all LaTeX formatting and structure**
-5. Returns a complete, valid LaTeX document ready for compilation
+1. Receives the **full master pool** (`ResumeContent` as JSON) and the parsed `JobPosting`
+2. Asks the LLM (structured output, `generate_structured` with the `ResumeContent` schema) to:
+   - **Select** the most relevant experiences/projects and drop the rest
+   - **Order** them by relevance to the job
+   - **Reword** bullets to mirror the job's keywords (truthfully, X-Y-Z style)
+   - Reorder skills to surface job-relevant ones first
+   - Never fabricate experience, employers, skills, or metrics
+3. Applies `_enforce_budget()` — deterministic guardrails after the LLM:
+   - Header restored **verbatim** from the master (the model can never alter contact details)
+   - Hard one-page caps: `MAX_EXPERIENCE=5`, `MAX_PROJECTS=5`, `MAX_BULLETS_PER_EXPERIENCE=5`, `MAX_BULLETS_PER_PROJECT=3`, `MAX_SKILL_GROUPS=5`
+   - Falls back to the full master content if the model returns an empty selection
 
-**Temperature:** 0.7 (allows creative rephrasing while maintaining accuracy)
+**Output:** a validated `ResumeContent` — never LaTeX.
 
-**Retry Logic:** Up to 3 attempts with exponential backoff (2^n seconds) to handle transient API errors
+**Retry Logic:** the apply pipeline retries a failed tailoring step up to `MAX_RETRIES` (default 3, env-configurable) with the job's `retry_count` tracked in the database.
 
 ## Prompt Engineering Details
 
@@ -166,71 +179,49 @@ Raw job descriptions are often verbose and unstructured. The parsing agent disti
 **Strategy:** Extraction-focused with minimal interpretation
 
 **Key Instructions:**
-- "Extract ALL job listings visible on the page"
-- "If company name is not visible, use 'Unknown Company'"
-- "Return structured JSON object"
+- "If company name is not explicitly stated, infer from context or use 'Unknown Company'"
+- "Return the result as a structured JSON object matching the schema"
 
 **Token Limits:**
-- Job description truncated to ~8,000 characters to fit in prompt
+- Job description truncated to fit in prompt
 - Focus on top of description where key requirements usually appear
 
 ### ResumeTailorAgent Prompt
 
-**Strategy:** Expert resume writer persona with specific formatting constraints
+**Strategy:** Expert resume writer persona, optimizing for ATS keyword match — selection and rewording of structured data, never formatting.
 
-**Key Instructions:**
+**Key Instructions (from `agents.py`):**
 
-1. **Writing Guidelines:**
-   - "Rewrite bullet points using Google's X-Y-Z formula: 'Accomplished [X] as measured by [Y], by doing [Z]'"
-   - "Highlight relevant experience and skills matching the job"
-   - "Adjust professional summary to align with position"
-   - "Prioritize skills mentioned in job description"
-   - "Keep resume concise and impactful (strictly 1 page)"
+1. **Selection & ordering:**
+   - "SELECT the most relevant experiences and projects for this job and DROP the least relevant"
+   - "ORDER experiences and projects by relevance to the job (most relevant first)"
+   - "Target a single page"
 
-2. **Technical Constraints:**
-   - "Maintain ALL LaTeX formatting, commands, and document structure EXACTLY"
-   - "Do NOT add markdown formatting - use LaTeX commands only (e.g., `\textbf{}` for bold)"
-   - "Output ONLY valid LaTeX code with no additional explanations or comments"
+2. **Rewording:**
+   - "REWRITE bullet points to mirror the job's key requirements and terminology wherever it is truthful, keeping them quantified and in the 'Accomplished X as measured by Y, by doing Z' style"
+   - "Reorder and trim the skills to surface the most job-relevant ones first"
 
-3. **Context Provided:**
-   - Full master resume LaTeX code
-   - Parsed job analysis (company, title, summary, key requirements)
+3. **Safety constraints:**
+   - "Keep the header EXACTLY as given" (also enforced in code afterwards)
+   - "NEVER fabricate experience, employers, skills, or metrics"
+   - "Plain text only in every field — no markdown and no LaTeX commands"
 
-**Example Prompt (Abbreviated):**
-```
-You are an expert resume writer and LaTeX specialist with over 20 years of experience.
+4. **Context provided:** the parsed job (company, title, summary, key requirements) and the full master pool as JSON (`master.model_dump_json()`).
 
-Your task:
-- Analyze the job requirements and skills
-- Rewrite the resume content to highlight relevant experience
-- Tailor bullet points to emphasize achievements relevant to this role
-- Rewrite bullet points using the Google formula: "Accomplished [X] as measured by [Y], by doing [Z]"
-- Keep resume strictly 1 page
-- Maintain ALL LaTeX formatting EXACTLY
-- Output ONLY valid LaTeX code
+The structured-output schema (`ResumeContent`) is enforced by the LLM provider, so a malformed response fails validation loudly instead of producing a broken document.
 
-Master Resume LaTeX:
-```latex
-[... full master.tex content ...]
-```
+## Deterministic LaTeX Rendering
 
-Job Analysis:
-Company: TechCorp
-Title: Senior Backend Engineer
-Summary: [...]
-Key Requirements:
-- 5+ years backend development
-- Python and Go expertise
-- Microservices architecture
-[...]
+**Located in:** `backend/services/resume-tailor/core/resume_renderer.py`
 
-Return the complete tailored LaTeX resume below:
-```
+`render_resume(content)` renders the tailored `ResumeContent` through a fixed Jinja2 template:
 
-**Why Temperature 0.7?**
-- Lower than creative writing (0.9+) to maintain factual accuracy
-- Higher than factual extraction (0.1) to allow natural rephrasing
-- Balances consistency with creativity in highlighting achievements
+- **Template:** `data/resume_template.tex.j2` — the Jake Gutierrez resume layout, with section blocks for header, education, skills, summary, experience, and projects. Empty sections are omitted automatically.
+- **LaTeX-safe delimiters:** Jinja2 is configured with `<< … >>` for variables and `<% … %>` for blocks so the template never clashes with LaTeX braces.
+- **Escaping:** every interpolated value passes through the `tex` filter (`latex_escape`), which escapes all 10 LaTeX special characters (`\ & % $ # _ { } ~ ^`) in a single pass. URLs pass through `texurl`, which escapes only `%` and `#` so `\href` links stay valid.
+- **StrictUndefined:** a typo in the template fails loudly instead of rendering an empty value.
+
+Because the structure comes from the template and all content is escaped, **the output is always compilable** — there is no "validate the LLM's LaTeX" step anymore.
 
 ## PDF Generation Process
 
@@ -292,68 +283,22 @@ pdflatex --version
 - **2 compilation passes** – Resolves cross-references and labels (standard LaTeX practice)
 - **30-second timeout** – Prevents infinite loops in malformed LaTeX
 
-## LaTeX Validation
-
-### Pre-Compilation Checks
-
-**Function:** `ResumeTailorAgent._validate_latex(latex_content: str) -> bool`
-
-Before attempting to compile, the agent validates that the generated content is actually LaTeX:
-
-**Required Patterns:**
-```python
-required_patterns = [
-    r'\\documentclass',   # Document type declaration
-    r'\\begin{document}', # Document start
-    r'\\end{document}'    # Document end
-]
-```
-
-If any pattern is missing → reject the output and retry (up to 3 times)
-
-### Why This Matters
-
-AI models sometimes:
-- Wrap LaTeX in markdown code blocks (` ```latex ... ``` `)
-- Add explanatory text before or after the code
-- Generate incomplete documents
-
-Validation catches these issues before wasting time on pdflatex compilation.
-
-### Post-Compilation Validation
-
-After pdflatex runs, check:
-1. **Exit code** – 0 = success
-2. **PDF file exists** – Confirms output was generated
-3. **Log file** – Contains detailed error messages if compilation failed
-
-**Common Log File Errors:**
-- `! Undefined control sequence` → Unknown LaTeX command (AI hallucination)
-- `! Missing $ inserted` → Math mode formatting error
-- `! LaTeX Error: File 'package.sty' not found` → Missing LaTeX package
-
 ## Common Failures
 
-### 1. Malformed LaTeX
+### 1. Invalid Structured Output from the LLM
 
 **Symptoms:**
-- pdflatex exits with non-zero code
-- Log file shows syntax errors
+- Tailoring step fails with a Pydantic validation error
+- `RETRY_ATTEMPT` events in the job's SSE stream
 
 **Causes:**
-- AI generated invalid LaTeX commands
-- Unescaped special characters (`&`, `%`, `$`, `#`)
-- Mismatched braces `{}` or environments
+- LLM returned JSON that violates the `ResumeContent` schema (empty bullets, missing fields)
 
 **Solutions:**
-- **Automatic retry:** Agent retries up to 3 times with fresh generation
-- **Better prompts:** Emphasize "Output ONLY valid LaTeX code" in prompt
-- **Validation:** Pre-check for common patterns before compilation
+- **Automatic retry:** the apply pipeline retries the tailoring step up to `MAX_RETRIES` times
+- Schema validation happens at the provider layer, so a bad response never reaches rendering
 
-**Prevention:**
-- Keep master.tex simple and well-formed (AI learns from it)
-- Avoid complex custom LaTeX commands
-- Use standard LaTeX packages only
+> Note: malformed *LaTeX* is no longer a failure mode for generated content — the template is fixed and all values are escaped. If pdflatex fails, the bug is in `resume_template.tex.j2` itself, not in the LLM output.
 
 ### 2. Missing LaTeX Packages
 
@@ -363,39 +308,29 @@ After pdflatex runs, check:
 ```
 
 **Causes:**
-- AI used a package not installed in the TeX distribution
-- Master resume uses a rare or custom package
+- The template uses a package not installed in the TeX distribution (the stock template needs `fullpage`, `titlesec`, `marvosym`, `enumitem`, `hyperref`, `fancyhdr`, `babel`, `tabularx`)
 
 **Solutions:**
 - **Install package:** `tlmgr install fancyhdr` (or use full TeX Live install)
-- **Update master.tex:** Remove or replace the problematic package
 - **Use Docker:** The `tailor` container has a comprehensive TeX Live installation
-
-**Prevention:**
-- Stick to standard packages: `geometry`, `inputenc`, `fontenc`, `hyperref`
-- Test master.tex compilation before using it in AutoCareer
 
 ### 3. AI Hallucinations
 
 **Symptoms:**
 - Generated resume has fabricated achievements or skills
 - Bullet points don't match actual work history
-- Skills listed that aren't in master resume
 
 **Causes:**
 - AI "filling in" gaps to match job requirements
-- Temperature too high (>0.8) causing creative liberties
-- Insufficient context from master resume
 
-**Solutions:**
-- **Manual review:** Always check tailored resume before applying
-- **Lower temperature:** Keep at 0.7 or below for factual accuracy
-- **Enrich master.tex:** Include more detail so AI has real content to work with
-- **Stronger prompts:** Add "Do NOT invent experience or skills not in the master resume"
+**Mitigations already in place:**
+- Prompt rule: "NEVER fabricate experience, employers, skills, or metrics. Only reuse and rephrase what is in the pool."
+- The header (name/contact) is restored verbatim in code after tailoring
+- The model can only select/reword from the pool you wrote in `master_resume.json`
 
 **Detection:**
-- Compare tailored resume side-by-side with master.tex
-- Look for suspiciously perfect matches to job requirements
+- Always manually review tailored resumes before applying
+- Compare bullets side-by-side with `master_resume.json`
 - Verify metrics and achievements are real
 
 ### 4. Compilation Timeout
@@ -406,135 +341,76 @@ Compilation timed out after 30 seconds
 ```
 
 **Causes:**
-- Infinite loop in LaTeX code (rare)
-- Very large document (>10 pages)
-- Slow disk I/O
+- Very slow disk I/O, or a template bug introducing an infinite loop (rare)
 
 **Solutions:**
 - **Increase timeout:** Modify `compile_latex()` timeout parameter
-- **Simplify resume:** Keep to 1 page as recommended
-- **Check for loops:** Look for recursive `\input` or malformed loops
+- **Check the template** if you've customized `resume_template.tex.j2`
 
 ### 5. Encoding Issues
 
 **Symptoms:**
 - Special characters (é, ñ, ö) render as `?` or garbage
-- Compilation fails with encoding errors
 
 **Causes:**
-- Missing `\usepackage[utf8]{inputenc}` in master.tex
-- Name or company has non-ASCII characters
+- Non-ASCII characters in `master_resume.json` that the template's font setup can't render
 
 **Solutions:**
-- **Add to master.tex:**
-  ```latex
-  \usepackage[utf8]{inputenc}
-  \usepackage[T1]{fontenc}
-  ```
+- The template uses `\pdfgentounicode=1` for ATS-parsable output; most accented Latin characters work
 - **Fallback:** Use ASCII alternatives (e.g., `Resume` instead of `Résumé`)
 
-## Customization Tips for master.tex
+## Maintaining Your Master Resume Pool
 
-### 1. Document Class and Layout
+### 1. Be Comprehensive — the AI Filters for You
 
-**Recommended:**
-```latex
-\documentclass[11pt,a4paper]{article}
-\usepackage{geometry}
-\geometry{margin=0.75in}  % Adjust margins for conciseness
+Include **everything** in `master_resume.json`: every job, project, and skill. The tailoring agent selects the most relevant subset per job and the budget guardrails keep the result to one page. More pool content = better tailoring.
+
+### 2. Bullet Points and Achievements
+
+**Good (follows the X-Y-Z formula):**
+```json
+"Reduced API latency by 40% (from 500ms to 300ms) by implementing a Redis caching layer"
 ```
 
-**Options:**
-- **Font size:** 10pt (compact), 11pt (standard), 12pt (readable)
-- **Paper:** `a4paper` (international), `letterpaper` (US)
-- **Margins:** 0.5in (aggressive), 0.75in (balanced), 1in (spacious)
-
-### 2. Section Formatting
-
-**Standard Sections:**
-```latex
-\section*{Professional Summary}
-\section*{Skills}
-\section*{Experience}
-\section*{Education}
-\section*{Projects}  % Optional
-\section*{Certifications}  % Optional
+**Bad (vague, no metrics):**
+```json
+"Worked on improving API performance"
 ```
 
-**Tip:** Use `\section*{}` (with asterisk) to suppress section numbering.
+The more specific and metric-driven your bullets are, the better the AI can adapt them to different jobs.
 
-### 3. Bullet Points and Achievements
+### 3. Plain Text Only
 
-**Good Example (follows Google X-Y-Z formula):**
-```latex
-\item Reduced API latency by 40\% (from 500ms to 300ms) by implementing Redis caching layer
-\item Increased test coverage from 60\% to 95\% by writing 200+ unit tests using pytest
+Write bullets as plain text. Do **not** embed LaTeX commands (`\textbf{}`, etc.) — special characters are escaped automatically, so embedded commands would render literally.
+
+### 4. Multiple Roles per Company
+
+Use the `roles` list to show a promotion or contract-to-hire under one company heading:
+
+```json
+"roles": [
+  { "title": "Senior Software Engineer", "dates": "2022 -- Present" },
+  { "title": "Software Engineer", "dates": "2020 -- 2022" }
+]
 ```
 
-**Bad Example (vague, no metrics):**
-```latex
-\item Worked on improving API performance
-\item Wrote tests for the codebase
-```
+### 5. Customizing the Layout
 
-**Tailoring Agent Tip:**
-The more specific and metric-driven your master.tex bullet points are, the better the AI can adapt them to different jobs.
+Layout changes (fonts, margins, section order) go in `data/resume_template.tex.j2`, not in the JSON. Keep template edits small and run the renderer tests (`tests/test_resume_renderer.py`) after changing it. Remember the Jinja2 delimiters are `<< >>` / `<% %>`.
 
-### 4. Skills Section Organization
+### 6. Validating Your Pool
 
-**Option 1: By Category**
-```latex
-\textbf{Languages:} Python, Go, TypeScript, Java \\
-\textbf{Frameworks:} FastAPI, Django, React \\
-\textbf{Tools:} Docker, Kubernetes, Git, Jenkins
-```
-
-**Option 2: By Proficiency**
-```latex
-\textbf{Expert:} Python, PostgreSQL, AWS \\
-\textbf{Proficient:} Go, TypeScript, GCP \\
-\textbf{Familiar:} Rust, Kafka, Terraform
-```
-
-**Tailoring Behavior:**
-The AI will reorder and emphasize skills matching the job requirements. Include ALL skills you have—the agent will filter for relevance.
-
-### 5. Quantifiable Metrics
-
-**Include numbers wherever possible:**
-- Team size ("Mentored 3 junior engineers")
-- Scale ("Serving 10M+ requests/day")
-- Performance ("Reduced costs by 30%")
-- Time ("Delivered feature 2 weeks ahead of schedule")
-
-**Why:** AI can use these metrics to craft compelling, evidence-based bullet points.
-
-### 6. Avoiding Over-Complexity
-
-**Keep it Simple:**
-- ❌ Custom commands (`\newcommand{\myskill}[1]{...}`)
-- ❌ Complex tables or multi-column layouts
-- ❌ Graphics, logos, or images
-- ❌ Custom fonts or exotic packages
-
-**Rationale:** Complex LaTeX is harder for AI to preserve correctly. Stick to standard formatting.
-
-### 7. Testing Your Master Resume
-
-**Before using in AutoCareer:**
 ```bash
-# Test compilation
-cd backend/services/resume-tailor/data
-pdflatex master.tex
-
-# Check for errors in master.log
-# Verify master.pdf looks correct
+cd backend/services/resume-tailor
+TESTING=true /path/to/repo/.venv/bin/python -c "
+from server import load_master_resume_content
+from core.resume_renderer import render_resume
+content = load_master_resume_content('./data/master_resume.json')
+print(render_resume(content)[:500])
+"
 ```
 
-**Common Issues:**
-- Missing `\end{document}`
-- Unescaped `&` in company names
-- Unclosed `\textbf{}` or `\begin{itemize}`
+A Pydantic error here means the JSON violates the schema (empty strings, over-long bullets, missing required fields).
 
 ## Full Tailoring Workflow Example
 
@@ -560,7 +436,7 @@ Content-Type: application/json
 
 ### Step 3: Scraper Fetches Job Description
 
-**Request to scraper service:**
+**Request to scraper service** (via `scrape_url()`, which retries timeouts/5xx with exponential backoff):
 ```http
 POST http://scraper:8001/scrape
 Content-Type: application/json
@@ -577,7 +453,7 @@ Content-Type: application/json
 
 **Input:** Raw job description text
 
-**AI Call:** Google Gemini Pro with structured output
+**AI Call:** Claude via `claude-agent-sdk` with structured output (Gemini fallback if `LLM_PROVIDER=gemini`)
 
 **Output:**
 ```python
@@ -593,28 +469,26 @@ JobPosting(
 )
 ```
 
-### Step 5: ResumeTailorAgent Rewrites Resume
+### Step 5: ResumeTailorAgent Selects and Rewords Content
 
-**Input:** 
-- Master LaTeX resume (read from `data/master.tex`)
+**Input:**
+- Master content pool (`ResumeContent` loaded from `data/master_resume.json`)
 - Parsed job posting
 
-**AI Call:** Google Gemini Pro (text generation, not structured)
+**AI Call:** Claude via `claude-agent-sdk` with structured output against the `ResumeContent` schema (Gemini fallback if `LLM_PROVIDER=gemini`)
 
-**Output:** Complete tailored LaTeX document
+**Output:** Tailored `ResumeContent` (subset of the pool, reworded, ordered by relevance)
 
-**Validation:** Check for `\documentclass`, `\begin{document}`, `\end{document}`
+**Guardrails:** `_enforce_budget()` restores the header verbatim and caps experiences/projects/bullets for a one-page result
 
-**Retry:** If validation fails, retry up to 2 more times
+**Retry:** On failure, the pipeline retries up to `MAX_RETRIES` times (tracked on the job record, surfaced as SSE `RETRY_ATTEMPT` events)
 
-### Step 6: PDF Compilation
+### Step 6: Rendering + PDF Compilation
 
-**LaTeXCompiler:**
-1. Write tailored LaTeX to `output/resume_<uuid>.tex`
-2. Run `pdflatex` (twice)
-3. Check exit code and PDF existence
-4. Rename to `Resume_TechCorp_Senior_Backend_Engineer_2024-04-04_<uuid>.pdf`
-5. Cleanup `.aux`, `.log` files
+1. `render_resume(tailored_content)` → complete LaTeX document (deterministic, escaped)
+2. **LaTeXCompiler:** write `output/resume_<uuid>.tex`, run `pdflatex` (twice), check exit code and PDF existence
+3. Rename to `Resume_TechCorp_Senior_Backend_Engineer_2024-04-04_<uuid>.pdf`
+4. Cleanup `.aux`, `.log` files
 
 **Output Path:** `backend/services/resume-tailor/output/Resume_TechCorp_...pdf`
 
@@ -661,25 +535,26 @@ Content-Disposition: attachment; filename="Resume_TechCorp_Senior_Backend_Engine
 2. **Cache master resume** – Load once at startup, not per application
 3. **Parallel applications** – Tailor multiple jobs simultaneously
 
-### AI API Rate Limits
+### AI Inference Limits
 
-**Google Gemini Free Tier:**
-- 15 requests per minute
-- 1,500 requests per day
+**Claude (default engine):**
+- Inference runs through the `claude-agent-sdk`, billed against your Claude Pro/Max subscription (authenticated via `CLAUDE_CODE_OAUTH_TOKEN`) — no per-token API cost.
+- Calls go through the `claude` CLI subprocess (~3–13s each), so latency is higher than the old Gemini HTTP path.
 
-**Bottleneck:** Tailoring + scoring can hit rate limits with many applications
+**Gemini (legacy fallback, `LLM_PROVIDER=gemini`):** subject to Google's per-token API rate limits and billing.
+
+**Bottleneck:** Tailoring + scoring throughput is bounded by per-call latency, and the Gemini fallback can hit Google's rate limits with many applications.
 
 **Mitigation:**
 - Add retry logic with exponential backoff (already implemented)
-- Use paid tier for higher limits
 - Queue applications and process slowly
 
 ### Compilation Performance
 
 **Typical Time:**
 - pdflatex (2 passes): 1-2 seconds
-- AI tailoring: 5-10 seconds (depends on API latency)
-- Total: ~10-15 seconds per application
+- AI tailoring (default Claude engine via `claude` CLI subprocess): ~3-13 seconds per call
+- Total: varies with LLM latency per application
 
 **Optimization:**
 - Run pdflatex only once if no cross-references needed
@@ -782,52 +657,50 @@ docker-compose logs -f tailor
 
 **Solution:**
 - Restart the tailor service: `docker-compose restart tailor`
-- Check for AI API errors (rate limits, invalid API key)
+- Check for LLM errors (Claude auth/timeout, or Gemini rate limits when using the fallback)
 
 ### Issue: Generated resume has incorrect information
 
-**Cause:** AI hallucination or over-creative tailoring
+**Cause:** AI hallucination or over-creative rewording
 
 **Prevention:**
-- Keep temperature at 0.7 or lower
-- Ensure master.tex is detailed and accurate
-- Add prompt constraint: "Only use information from the master resume"
+- Ensure `master_resume.json` is detailed and accurate — the model can only select from it
+- The header is restored from the master in code, so contact details are always correct
 
 **Detection:**
 - Always manually review tailored resumes before sending
-- Compare against master.tex for fabricated content
+- Compare against `master_resume.json` for fabricated content
 
-### Issue: PDF compilation timeout
+### Issue: Pydantic validation error when loading the master resume
 
-**Cause:** Infinite loop or very large document
+**Cause:** `master_resume.json` violates the `ResumeContent` schema
 
 **Solution:**
-- Simplify master.tex (remove complex commands)
-- Increase timeout in `latex_compiler.py` (line 94): `timeout=60`
+- Read the error message — it names the exact field (e.g., empty bullet, bullet over 400 chars, missing `roles`)
+- See `core/resume_model.py` for all field constraints
 
 ## Best Practices
 
-### 1. Maintain a High-Quality Master Resume
+### 1. Maintain a High-Quality Master Pool
 
-- **Be comprehensive:** Include all relevant experience, even if old
+- **Be comprehensive:** Include all relevant experience, even if old — selection happens per job
 - **Use metrics:** Quantify achievements with numbers
 - **Update regularly:** Add new skills and projects as you gain them
-- **Test compilation:** Ensure master.tex compiles without errors
+- **Validate:** Loading the JSON catches schema errors immediately
 
 ### 2. Review Before Applying
 
 **Always manually review tailored resumes:**
 - Check for factual accuracy (no hallucinations)
 - Verify formatting looks professional
-- Ensure 1-page limit (or adjust if needed)
 - Proofread for typos (AI can introduce errors)
 
 ### 3. Iterate on Tailoring Quality
 
 **If results are poor:**
-- Improve master.tex with more detail and metrics
+- Improve `master_resume.json` with more detail and metrics
 - Adjust global filter to better match your background
-- Experiment with prompt modifications (requires code changes)
+- Experiment with prompt modifications in `core/agents.py` (requires code changes)
 
 ### 4. Organize Output PDFs
 
@@ -845,4 +718,6 @@ Resume_Company_Title_Date_UUID.pdf
 
 - [Job Discovery](./job-discovery.md) – How jobs are found and scored
 - [Application Tracking](./application-tracking.md) – Managing application status
+- [Resume Model](../../backend/services/resume-tailor/core/resume_model.py) – `ResumeContent` schema source
+- [Resume Renderer](../../backend/services/resume-tailor/core/resume_renderer.py) – Deterministic LaTeX rendering
 - [LaTeX Compiler Implementation](../../backend/services/resume-tailor/core/latex_compiler.py) – Source code reference

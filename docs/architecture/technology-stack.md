@@ -238,8 +238,8 @@ This document explains the technology choices for AutoCareer and the rationale b
 **Why Chosen**:
 
 1. **AI Library Ecosystem**:
-   - Google Generative AI SDK (official Gemini client)
-   - Pydantic for data validation (used by Gemini for structured output)
+   - `claude-agent-sdk` (official Claude Agent SDK; default engine) — and the Google Generative AI SDK retained as a fallback
+   - Pydantic for data validation (target models for the SDK's structured output)
    - LangChain for AI agent patterns (future potential)
 
 2. **Web Framework Compatibility**:
@@ -421,60 +421,48 @@ This document explains the technology choices for AutoCareer and the rationale b
 
 ## AI & Machine Learning
 
-### Google Gemini Pro
+### Claude (via the Claude Agent SDK)
 
-**What It Is**: Large language model from Google with multimodal capabilities and structured output.
+**What It Is**: Anthropic's Claude family of large language models, accessed through the `claude-agent-sdk` Python package. The default engine, selectable via `LLM_PROVIDER` (`claude` default, `gemini` legacy fallback). Model chosen via `CLAUDE_MODEL` (default `sonnet`; also `haiku`/`opus`/full model ids).
 
 **Why Chosen**:
 
-1. **Structured JSON Output** (Killer Feature):
+1. **No Per-Token Cost**:
+   - Authenticated by a Claude Pro/Max **subscription** via `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`)
+   - Inference draws from the subscription — no pay-per-token API billing
+   - **Never set `ANTHROPIC_API_KEY`**: it shadows the OAuth token and switches to pay-per-token billing; the `claude_auth_configured` startup check fails fast if it is present
+
+2. **Structured JSON Output** (Killer Feature):
    ```python
-   # Define expected output schema
+   # Define expected output schema (core/models.py)
    class JobListing(BaseModel):
        title: str
        company: str
        url: str
-   
-   # AI returns validated JSON matching schema
-   result = model.generate_content(
-       prompt,
-       generation_config={"response_mime_type": "application/json"}
-   )
-   jobs: List[JobListing] = parse_obj_as(List[JobListing], result.text)
+
+   # The SDK's output_format JSON schema produces structured_output,
+   # which is validated into the Pydantic model.
+   result_message = await query_with_schema(prompt, schema=JobListing)
+   listing = JobListing.model_validate(result_message.structured_output)
    ```
-   - No prompt engineering to get valid JSON
-   - No parsing errors from malformed output
-   - Pydantic validates structure automatically
+   - No prompt engineering to coax valid JSON
+   - SDK enforces the schema; Pydantic validates structure on the way in
+   - Works the same across the provider abstraction
 
-2. **Long Context Window**:
-   - 1M token context (Gemini 1.5 Pro)
-   - Can fit entire resume (1K tokens) + full job description (2K tokens)
-   - No chunking required
-
-3. **Cost-Effective**:
-   - Free tier: 15 requests/minute, 1M tokens/day
-   - Paid tier: $0.125 per 1M input tokens (cheaper than GPT-4)
-   - For AutoCareer scale (100s jobs/day), stays within free tier
-
-4. **Speed**:
-   - Average response time: 2-3 seconds for 1K token output
-   - Faster than GPT-4, comparable to GPT-3.5 Turbo
-   - Supports streaming (future feature: real-time resume updates)
-
-5. **Google Integration** (Future):
-   - Can connect to Gmail (send applications)
-   - Google Docs (export resumes)
-   - Google Calendar (schedule interviews)
+3. **Provider Abstraction Kept**:
+   - The active code is `core/llm_providers.py`: the `LLMProvider` ABC plus `ClaudeAgentProvider` (default), `GeminiProvider` (fallback), and `StubProvider` (tests), wired up by `create_default_provider()`
+   - Agents (`core/agents.py`) depend only on the `LLMProvider` interface, so swapping engines is configuration, not code surgery
+   - Gemini stays a documented fallback: set `LLM_PROVIDER=gemini` (needs `GOOGLE_API_KEY`)
 
 **Alternatives Considered**:
-- **OpenAI GPT-4**: Better reasoning, but more expensive, no native JSON mode (need function calling)
-- **Anthropic Claude**: Great for long context, but no free tier
-- **Open-Source LLMs (LLaMA, Mistral)**: Self-hosted, but require GPU, worse quality
+- **Google Gemini** (now the fallback): direct HTTP API with native JSON mode; retained behind the abstraction
+- **OpenAI GPT-4**: Strong reasoning, but pay-per-token and would need its own provider implementation
+- **Open-Source LLMs (LLaMA, Mistral)**: Self-hosted, but require GPU, generally worse quality
 
 **Trade-offs**:
-- **Vendor Lock-In**: Gemini API-specific code (mitigated by abstraction in `llm_client.py`)
-- **Rate Limits**: 15 req/min on free tier (handled by retry logic)
-- **Non-Deterministic**: Same prompt can yield different results (need quality checks)
+- **Subprocess Latency**: The SDK shells out to the local `claude` CLI subprocess (Node + `@anthropic-ai/claude-code`, installed in the tailor Docker image), so each call is ~3–13s — slower than the old direct Gemini HTTP path. This is a real architectural trade-off, accepted for subscription billing and structured-output reliability.
+- **Runtime Dependency**: Requires the `claude` CLI (Node) present in the container alongside Python.
+- **Non-Deterministic**: Same prompt can yield different results (need quality checks).
 
 ---
 
@@ -491,8 +479,8 @@ This document explains the technology choices for AutoCareer and the rationale b
        min_experience_years: int
        education: Optional[str]
    
-   # Gemini returns JSON, Pydantic validates
-   result = JobRequirements.parse_raw(ai_response)
+   # The Claude Agent SDK returns structured_output, Pydantic validates
+   result = JobRequirements.model_validate(result_message.structured_output)
    # Raises ValidationError if schema doesn't match
    ```
 
@@ -607,7 +595,7 @@ This document explains the technology choices for AutoCareer and the rationale b
 **Alternatives Considered**:
 - **lxml**: Faster, but stricter parsing (fails on invalid HTML)
 - **Regular Expressions**: Too brittle for HTML
-- **AI Parsing Only**: Expensive to send full HTML to Gemini for every job
+- **AI Parsing Only**: Expensive to send full HTML to the LLM for every job
 
 ---
 
@@ -708,13 +696,13 @@ SYNC_ON_BOOT=true   # Copy PostgreSQL → SQLite on startup
    - Superior to Word/Google Docs for technical resumes
 
 2. **Programmability**:
-   - Resumes are plain text files (`.tex`)
-   - Easy to automate section replacements:
+   - The resume layout is a Jinja2 LaTeX template (`data/resume_template.tex.j2`)
+   - Content lives as structured JSON (`data/master_resume.json`); `core/resume_renderer.py` renders it deterministically:
      ```python
-     template = open("master.tex").read()
-     tailored = template.replace("{{EXPERIENCE}}", new_experience)
+     content = load_master_resume_content("./data/master_resume.json")  # → ResumeContent
+     latex = render_resume(content)  # Jinja2 + LaTeX escaping, always compilable
      ```
-   - AI agent rewrites LaTeX directly (no format conversion)
+   - The AI agent never writes LaTeX — it produces validated `ResumeContent` (structured output)
 
 3. **Version Control**:
    - `.tex` files are plain text (Git-friendly)
@@ -735,11 +723,11 @@ SYNC_ON_BOOT=true   # Copy PostgreSQL → SQLite on startup
 
 2. **Compilation Errors**:
    - LaTeX syntax errors stop compilation
-   - AI can hallucinate invalid LaTeX (e.g., `\textbf{unclosed`)
-   - Need error handling + retry logic
+   - Mitigated by design: the template is fixed and every interpolated value is escaped (`| tex` filter), so the LLM cannot produce invalid LaTeX — a pdflatex failure points at a template bug, not model output
 
 3. **Learning Curve**:
-   - Users must provide master resume in LaTeX format
+   - Users maintain their master resume as structured JSON (`master_resume.json`), no LaTeX knowledge needed for content
+   - Layout changes require editing the Jinja2 LaTeX template
    - Not WYSIWYG (need to compile to see output)
 
 **Alternatives Considered**:
@@ -749,7 +737,7 @@ SYNC_ON_BOOT=true   # Copy PostgreSQL → SQLite on startup
 
 **Why LaTeX Wins**:
 - **Quality**: Recruiters prefer LaTeX-typeset resumes (clean, professional)
-- **AI Integration**: Gemini can generate LaTeX markup (trained on arXiv papers)
+- **AI Integration**: structured `ResumeContent` from the LLM maps 1:1 onto the template — no fragile format conversion
 - **Future-Proof**: LaTeX hasn't changed in decades (stability)
 
 ---
@@ -841,7 +829,7 @@ SYNC_ON_BOOT=true   # Copy PostgreSQL → SQLite on startup
 | **Migrations** | Alembic | Version control, autogenerate, team collab |
 | **Primary Database** | PostgreSQL 15 | JSONB, production reliability, advanced features |
 | **Portable Database** | SQLite | Single file, zero config, easy backups |
-| **AI Model** | Google Gemini Pro | Structured output, long context, free tier |
+| **AI Model** | Claude (Claude Agent SDK) | Subscription billing (no per-token cost), structured output, provider abstraction with Gemini fallback |
 | **Validation** | Pydantic | Schema enforcement, type coercion, error messages |
 | **Scraping** | Playwright | JavaScript rendering, headless, modern API |
 | **HTML Parsing** | BeautifulSoup | Lenient parsing, simple API, lightweight |
@@ -868,10 +856,10 @@ All technologies used in AutoCareer are open-source or have permissive licenses:
 | Playwright | Apache 2.0 | ✅ Yes |
 | TeX Live | LPPL (LaTeX), GPL (Binaries) | ✅ Yes (with attribution) |
 
-**Google Gemini API**:
-- Not open-source (proprietary API)
-- Free tier for non-commercial use
-- Paid tier for commercial use ($0.125/1M tokens)
+**Claude (Claude Agent SDK)**:
+- Not open-source (proprietary service); `claude-agent-sdk` is the client package
+- Default engine, authenticated by a Claude Pro/Max subscription (`CLAUDE_CODE_OAUTH_TOKEN`) — inference uses the subscription, no per-token cost
+- **Google Gemini API** remains the documented fallback (`LLM_PROVIDER=gemini`, `GOOGLE_API_KEY`): proprietary API, billed per token when used
 
 ---
 
@@ -907,6 +895,8 @@ All technologies used in AutoCareer are open-source or have permissive licenses:
 
 ### AI Latency
 
+Per-call latency runs ~3–13s on Claude, since each call spawns the `claude` CLI subprocess (slower than the old direct Gemini HTTP path):
+
 - **JobDiscoveryAgent**: 3-5s per source (HTML parsing)
 - **JobScoringAgent**: 2-3s per job (parallel, 10 jobs = 3s total)
 - **JobParsingAgent**: 4-6s per job (detailed extraction)
@@ -924,9 +914,10 @@ All technologies used in AutoCareer are open-source or have permissive licenses:
 
 ### Potential Upgrades
 
-1. **AI Provider Abstraction**:
-   - Support OpenAI, Claude, local LLMs via unified interface
-   - Fallback to cheaper model if primary fails
+1. **AI Provider Abstraction** (foundation now in place):
+   - The `LLMProvider` ABC in `core/llm_providers.py` already unifies engines — Claude (default) and Gemini (fallback) ship today
+   - Adding OpenAI or local LLMs is implementing the interface
+   - Fallback to an alternate provider if the primary fails
 
 2. **Caching Layer** (Redis):
    - Cache scraped HTML for 1 hour (avoid re-scraping)
@@ -961,7 +952,7 @@ All technologies used in AutoCareer are open-source or have permissive licenses:
 AutoCareer's technology stack balances:
 - **Developer Velocity**: FastAPI, Next.js, Tailwind enable rapid iteration
 - **Type Safety**: TypeScript + Pydantic + SQLModel catch errors early
-- **AI Integration**: Gemini's structured output + Pydantic = reliable automation
+- **AI Integration**: Claude's structured output (via the Claude Agent SDK) + Pydantic = reliable automation
 - **Quality**: LaTeX produces professional PDFs recruiters respect
 - **Reliability**: PostgreSQL + Docker ensure production-grade stability
 

@@ -190,6 +190,37 @@ def _check_gemini_api_key_configured() -> tuple[bool, str, dict[str, Any]]:
     return True, "GOOGLE_API_KEY is configured", {}
 
 
+def _check_claude_auth_configured() -> tuple[bool, str, dict[str, Any]]:
+    token = (os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or "").strip()
+    if not token:
+        return False, (
+            "CLAUDE_CODE_OAUTH_TOKEN is not configured. Run `claude setup-token` and set it."
+        ), {}
+    if "your_oauth_token_here" in token or "sk-ant-oat01-..." in token:
+        return False, "CLAUDE_CODE_OAUTH_TOKEN is still using a placeholder value", {}
+    # An API key present in the same process shadows the OAuth token and bills
+    # pay-per-token instead of the subscription, so refuse to start on it.
+    if (os.getenv("ANTHROPIC_API_KEY") or "").strip():
+        return False, (
+            "ANTHROPIC_API_KEY is set and would override CLAUDE_CODE_OAUTH_TOKEN "
+            "(billing pay-per-token instead of your subscription). Unset it."
+        ), {}
+    return True, "CLAUDE_CODE_OAUTH_TOKEN is configured", {}
+
+
+def _check_claude_cli_available() -> tuple[bool, str, dict[str, Any]]:
+    proc = subprocess.run(
+        ["claude", "--version"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode == 0:
+        first_line = proc.stdout.splitlines()[0] if proc.stdout else "claude available"
+        return True, "claude CLI is available", {"version": first_line}
+    return False, "claude CLI is unavailable", {"returncode": proc.returncode}
+
+
 def _check_scraper_reachability() -> tuple[bool, str, dict[str, Any]]:
     base_url = os.getenv("SCRAPER_SERVICE_URL", "http://scraper:8001").rstrip("/")
     timeout = float(os.getenv("STARTUP_SCRAPER_TIMEOUT_SECONDS", "5"))
@@ -214,12 +245,24 @@ def _check_pdflatex_availability() -> tuple[bool, str, dict[str, Any]]:
     return False, "pdflatex is unavailable", {"returncode": proc.returncode}
 
 
+def _llm_provider_checks() -> list[StartupCheck]:
+    """Auth checks for the active LLM provider (Claude by default)."""
+    if os.getenv("LLM_PROVIDER", "claude").lower() == "gemini":
+        return [
+            StartupCheck("gemini_api_key_configured", True, _check_gemini_api_key_configured),
+        ]
+    return [
+        StartupCheck("claude_auth_configured", True, _check_claude_auth_configured),
+        StartupCheck("claude_cli_available", True, _check_claude_cli_available),
+    ]
+
+
 def default_startup_checks() -> list[StartupCheck]:
     return [
         StartupCheck("database_connectivity", True, _check_database_connectivity),
         StartupCheck("migrations_baseline", True, _check_migrations_baseline),
         StartupCheck("master_resume_presence", True, _check_master_resume_presence),
-        StartupCheck("gemini_api_key_configured", True, _check_gemini_api_key_configured),
+        *_llm_provider_checks(),
         StartupCheck("scraper_reachability", True, _check_scraper_reachability),
         StartupCheck("pdflatex_availability", True, _check_pdflatex_availability),
     ]

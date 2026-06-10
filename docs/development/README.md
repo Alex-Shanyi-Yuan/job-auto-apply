@@ -86,6 +86,15 @@ Resume PDF generation (`latex_compiler.py`) requires TeX Live, which is only ins
 **Configuration:**
 Create `backend/services/resume-tailor/.env`:
 ```bash
+# LLM engine selection
+LLM_PROVIDER=claude                  # claude (default) | gemini (legacy fallback)
+
+# Claude via the claude-agent-sdk, authenticated by a Claude Pro/Max subscription.
+# Generate with `claude setup-token`. No per-token API billing.
+CLAUDE_CODE_OAUTH_TOKEN=your_oauth_token_here
+# ⚠️ Do NOT set ANTHROPIC_API_KEY — it shadows the OAuth token and bills pay-per-token.
+
+# Gemini fallback (only required when LLM_PROVIDER=gemini)
 GOOGLE_API_KEY=your_gemini_api_key_here
 
 # Database (choose one backend)
@@ -98,8 +107,9 @@ SQLITE_DATABASE_URL=sqlite:///./data/autocareer.db
 # Scraper service
 SCRAPER_SERVICE_URL=http://localhost:8001
 
-# Resume template
-MASTER_RESUME_PATH=./data/master.tex
+# Resume content
+MASTER_RESUME_JSON_PATH=./data/master_resume.json   # structured content pool (tailoring/scoring)
+MASTER_RESUME_PATH=./data/master.tex                # legacy reference; startup presence check only
 
 # Rate limiting
 RATE_LIMIT_DELAY=0.2
@@ -175,12 +185,18 @@ backend/services/resume-tailor/
 ├── database.py                  # SQLModel ORM models
 ├── core/
 │   ├── agents.py                # 4 AI agents (Discovery, Scoring, Parsing, Tailoring)
-│   ├── llm_client.py            # Google Gemini client with Pydantic schemas
+│   ├── llm_providers.py         # LLMProvider ABC + Claude/Gemini/Stub providers + factory
+│   ├── llm_client.py            # DEPRECATED legacy Gemini client (not imported)
+│   ├── models.py                # Pydantic schemas for structured LLM output
+│   ├── resume_model.py          # ResumeContent schema (structured resume data)
+│   ├── resume_renderer.py       # Deterministic Jinja2 → LaTeX rendering
 │   ├── jd_scraper.py            # Job description fetching (calls scraper service)
 │   ├── latex_compiler.py        # PDF generation from LaTeX
 │   └── db_sync.py               # PostgreSQL ↔ SQLite sync
 ├── data/
-│   ├── master.tex               # Master resume template (LaTeX)
+│   ├── master_resume.json       # Master resume content pool (source of truth)
+│   ├── resume_template.tex.j2   # Jinja2 LaTeX template (Jake Gutierrez layout)
+│   ├── master.tex               # Legacy LaTeX resume (visual reference only)
 │   └── autocareer.db            # SQLite database (if using sqlite backend)
 ├── migrations/versions/         # Alembic migration scripts
 └── scripts/
@@ -190,7 +206,9 @@ backend/services/resume-tailor/
 **Key Files:**
 - `server.py` — All API routes. **Add new endpoints here.**
 - `core/agents.py` — AI logic. Each agent returns Pydantic-validated JSON.
-- `core/llm_client.py` — Gemini API wrapper with retry/backoff and structured output.
+- `core/llm_providers.py` — Active LLM layer: the `LLMProvider` ABC plus `ClaudeAgentProvider` (default, via `claude-agent-sdk`), `GeminiProvider` (legacy fallback), `StubProvider` (tests), and the `create_default_provider()` factory.
+- `core/llm_client.py` — **Deprecated** legacy Gemini wrapper; no longer imported. Use `core/llm_providers.py`.
+- `core/resume_model.py` + `core/resume_renderer.py` — Structured resume pipeline: the tailor agent produces a validated `ResumeContent` (never LaTeX); the renderer turns it into always-compilable LaTeX via `data/resume_template.tex.j2`.
 - `database.py` — SQLModel models. **Schema changes require migrations.**
 
 **Patterns:**
@@ -323,18 +341,22 @@ See [Database Migrations](./database-migrations.md) for details.
 
 2. **Create agent class:**
    ```python
+   from typing import Optional
+   from core.llm_providers import LLMProvider, create_default_provider
+
    class MyAgent:
-       def __init__(self, llm_client: LLMClient):
-           self.llm = llm_client
+       def __init__(self, client: Optional[LLMProvider] = None):
+           self.client = client or create_default_provider()
        
        async def execute(self, input_data: str) -> MyAgentOutput:
            prompt = f"Process this: {input_data}"
-           return await self.llm.generate(prompt, MyAgentOutput)
+           return await self.client.generate(prompt, MyAgentOutput)
    ```
 
 3. **Call from endpoint:**
    ```python
-   agent = MyAgent(llm_client)
+   agent = MyAgent()                       # uses create_default_provider()
+   # agent = MyAgent(client=StubProvider())  # inject a stub in tests
    result = await agent.execute(data)
    ```
 
@@ -350,9 +372,9 @@ RESUME_TAILOR_LLM_MODE=stub uvicorn server:app --reload
 - Review system prompts and few-shot examples
 - Test with real API in small batches
 
-**Monitor Gemini API usage:**
-- Check Google Cloud Console → Generative AI Studio
-- Review quota limits and costs
+**Monitor LLM usage:**
+- Default Claude provider: inference is billed against your Claude Pro/Max subscription (authenticated via `CLAUDE_CODE_OAUTH_TOKEN`), so there is no per-token API cost. Calls run through the `claude` CLI subprocess.
+- Legacy Gemini provider (`LLM_PROVIDER=gemini`): check Google Cloud Console → Generative AI Studio for quota limits and costs.
 
 ## Contributing Guidelines (Future You)
 
@@ -454,7 +476,7 @@ docker-compose exec tailor alembic upgrade head
 
 ### PDF compilation fails
 - Ensure TeX Live is installed (only in Docker container)
-- Check `data/master.tex` for LaTeX syntax errors
+- Generated LaTeX is always escaped/compilable; check `data/resume_template.tex.j2` if you customized it
 - View logs: `docker-compose logs tailor`
 
 ### Scraper blocked by website
@@ -472,9 +494,11 @@ docker-compose exec tailor alembic upgrade head
 See `.env.example` in repository root for complete list.
 
 **Critical for development:**
-- `GOOGLE_API_KEY` — Required for AI features
+- `LLM_PROVIDER` — `claude` (default) | `gemini` (legacy fallback)
+- `CLAUDE_CODE_OAUTH_TOKEN` — Required for the default Claude provider (from `claude setup-token`); billed against your Claude subscription. Do NOT set `ANTHROPIC_API_KEY` (it shadows this and bills per-token).
+- `GOOGLE_API_KEY` — Required only when `LLM_PROVIDER=gemini`
 - `DATABASE_BACKEND` — sqlite (default) | postgres | hybrid
-- `RESUME_TAILOR_LLM_MODE` — Set to `stub` for testing without API costs
+- `RESUME_TAILOR_LLM_MODE` — Set to `stub`, `test`, or `offline` for testing without invoking the LLM
 
 ## Next Steps
 

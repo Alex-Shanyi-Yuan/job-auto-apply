@@ -1,7 +1,10 @@
 from typing import Optional, List
-import time
+import logging
 from .llm_providers import LLMProvider, create_default_provider
 from .models import JobPosting, DiscoveryResult, DiscoveredJob, JobScore
+from .resume_model import ResumeContent
+
+logger = logging.getLogger(__name__)
 
 
 class JobDiscoveryAgent:
@@ -52,9 +55,15 @@ Return the matching jobs as a structured JSON object."""
                 schema=DiscoveryResult,
                 temperature=0.1
             )
+            if not result.jobs and len(html_content) > 1000:
+                # Non-trivial HTML but nothing extracted — likely a parse failure
+                # rather than a genuinely empty page; surface it for debugging.
+                logger.warning(
+                    "Job discovery returned 0 jobs from %d chars of HTML", len(html_content)
+                )
             return result.jobs
         except Exception as e:
-            print(f"Error in job discovery: {e}")
+            logger.error("Error in job discovery: %s", e, exc_info=True)
             return []
 
 
@@ -111,7 +120,7 @@ Provide a score and brief reasoning (2-3 sentences)."""
             )
             return result
         except Exception as e:
-            print(f"Error scoring job: {e}")
+            logger.error("Error scoring job: %s", e, exc_info=True)
             return JobScore(score=50, reasoning="Unable to analyze - defaulting to moderate score")
 
 
@@ -139,92 +148,97 @@ class JobParsingAgent:
         
         Return the result as a structured JSON object matching the schema.
         """
-        
-        job_posting = self.client.generate_structured(
-            prompt=prompt,
-            schema=JobPosting
-        )
-        
+
+        try:
+            job_posting = self.client.generate_structured(
+                prompt=prompt,
+                schema=JobPosting,
+            )
+        except Exception as e:
+            # Don't crash the apply pipeline opaquely or fabricate a posting —
+            # raise a clear error so the job is marked failed with a real reason.
+            logger.error("Error parsing job description: %s", e, exc_info=True)
+            raise ValueError(f"Failed to parse job description: {e}") from e
+
         # Attach the raw text to the object for reference
         job_posting.raw_text = raw_text
         return job_posting
 
 
 class ResumeTailorAgent:
-    """Agent responsible for tailoring resumes to specific job postings."""
-    
+    """Agent that tailors a structured resume to a specific job.
+
+    The LLM receives the candidate's full content pool (all experiences/projects)
+    and the parsed job, and returns a tailored ``ResumeContent``: the most relevant
+    subset, ordered by relevance and reworded to mirror the job's keywords. It never
+    emits LaTeX — ``core/resume_renderer.render_resume`` turns the result into an
+    always-compilable, ATS-clean document. A deterministic guardrail then enforces a
+    one-page budget and preserves the header exactly.
+    """
+
+    # One-page budget. The LLM is asked to select; these are hard caps applied
+    # afterwards so a bad selection can't overflow the page.
+    MAX_EXPERIENCE = 5
+    MAX_PROJECTS = 5
+    MAX_BULLETS_PER_EXPERIENCE = 5
+    MAX_BULLETS_PER_PROJECT = 3
+    MAX_SKILL_GROUPS = 5
+
     def __init__(self, client: Optional[LLMProvider] = None):
         self.client = client or create_default_provider()
-        
-    def tailor(self, master_resume: str, job_posting: JobPosting, max_retries: int = 3) -> str:
-        """
-        Tailor the master resume to the provided job posting.
-        """
-        # TODO: maybe add a instrecution targeting keyward frequency?
-        prompt = f"""You are an expert resume writer and LaTeX specialist with over 20 years of experience.
 
-I will provide you with:
-1. A complete LaTeX resume file
-2. A structured job analysis
+    def tailor(self, master: ResumeContent, job_posting: JobPosting) -> ResumeContent:
+        """Return a tailored, one-page ``ResumeContent`` for this job."""
+        requirements = "\n".join(f"- {req}" for req in job_posting.key_requirements) or "- (none provided)"
+        prompt = f"""You are an expert resume writer optimizing for ATS keyword match and recruiter callbacks.
 
-Your task:
-- Analyze the job requirements and skills
-- Rewrite the resume content to highlight relevant experience and skills that match the job
-- Tailor bullet points to emphasize achievements and experience relevant to this specific role
-- Rewrite bullet points using the Google formula: "Accomplished [X] as measured by [Y], by doing [Z]"
-- Adjust the professional summary or objective to align with the position
-- Prioritize skills mentioned in the job description
-- Keep the resume concise and impactful (strictly 1 page)
-- Maintain ALL LaTeX formatting, commands, and document structure EXACTLY
-- Do NOT add markdown formatting - use LaTeX commands only (e.g., \\textbf{{}} for bold)
-- Output ONLY valid LaTeX code with no additional explanations or comments
+You are given a candidate's FULL resume content as JSON (the pool of every experience and project) and a target job. Produce a tailored, single-page resume as JSON that maximizes the chance a recruiter or ATS shortlists THIS candidate for THIS job.
 
-Master Resume LaTeX:
-```latex
-{master_resume}
-```
+Rules:
+- SELECT the most relevant experiences and projects for this job and DROP the least relevant. Target a single page: roughly up to {self.MAX_EXPERIENCE} experiences and {self.MAX_PROJECTS} projects total, fewer if bullets run long.
+- ORDER experiences and projects by relevance to the job (most relevant first).
+- REWRITE bullet points to mirror the job's key requirements and terminology wherever it is truthful, keeping them quantified and in the "Accomplished X as measured by Y, by doing Z" style.
+- Reorder and trim the skills to surface the most job-relevant ones first.
+- Keep the header EXACTLY as given (name, phone, email, links, citizenship).
+- Keep the education entries.
+- NEVER fabricate experience, employers, skills, or metrics. Only reuse and rephrase what is in the pool.
+- Plain text only in every field — no markdown and no LaTeX commands.
 
-Job Analysis:
+TARGET JOB:
 Company: {job_posting.company_name}
 Title: {job_posting.job_title}
 Summary: {job_posting.summary}
-Key Requirements:
-{chr(10).join(f"- {req}" for req in job_posting.key_requirements)}
+Key requirements:
+{requirements}
 
-Return the complete tailored LaTeX resume below:"""
+CANDIDATE RESUME POOL (JSON):
+{master.model_dump_json(indent=2)}
 
-        for attempt in range(max_retries):
-            try:
-                # We use max_retries=1 for the client call to avoid compounding retries
-                # If the API fails, we catch it here and retry the whole process
-                response = self.client.generate_text(prompt=prompt, temperature=0.7)
-                
-                if not self._validate_latex(response):
-                    raise ValueError("Generated content is not valid LaTeX")
-                    
-                return response
-                
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    wait_time = 2 ** attempt
-                    print(f"Retry {attempt + 1}/{max_retries} after error: {str(e)}")
-                    time.sleep(wait_time)
-                else:
-                    raise Exception(f"Failed to tailor resume after {max_retries} attempts: {str(e)}")
+Return the tailored resume as a JSON object matching the schema."""
 
-    def _validate_latex(self, latex_content: str) -> bool:
-        """
-        Validate that the content appears to be LaTeX.
-        """
-        required_patterns = [
-            r'\\documentclass',
-            r'\\begin{document}',
-            r'\\end{document}'
-        ]
-        
-        import re
-        for pattern in required_patterns:
-            if not re.search(pattern, latex_content):
-                return False
-        
-        return True
+        tailored = self.client.generate_structured(prompt=prompt, schema=ResumeContent)
+        return self._enforce_budget(tailored, master)
+
+    def _enforce_budget(self, tailored: ResumeContent, master: ResumeContent) -> ResumeContent:
+        """Deterministically guarantee a one-page result and a trustworthy header."""
+        # Never let the model alter contact details — restore the authored header.
+        tailored.header = master.header
+
+        # Guard against an empty selection by falling back to the pool.
+        if not tailored.experience and not tailored.projects:
+            logger.warning("Tailoring returned no experience/projects; falling back to master content")
+            tailored.experience = master.experience
+            tailored.projects = master.projects
+        if not tailored.education:
+            tailored.education = master.education
+        if not tailored.skills:
+            tailored.skills = master.skills
+
+        tailored.experience = tailored.experience[: self.MAX_EXPERIENCE]
+        for exp in tailored.experience:
+            exp.bullets = exp.bullets[: self.MAX_BULLETS_PER_EXPERIENCE]
+        tailored.projects = tailored.projects[: self.MAX_PROJECTS]
+        for proj in tailored.projects:
+            proj.bullets = proj.bullets[: self.MAX_BULLETS_PER_PROJECT]
+        tailored.skills = tailored.skills[: self.MAX_SKILL_GROUPS]
+        return tailored

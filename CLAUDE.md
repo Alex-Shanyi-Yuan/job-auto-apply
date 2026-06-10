@@ -26,9 +26,15 @@ docker-compose logs -f frontend
 cd backend/services/resume-tailor
 pip install -r requirements.txt
 uvicorn server:app --reload --port 8000
+
+# Run the backend test suite (deps live in the repo-root .venv, NOT a per-service venv)
+cd backend/services/resume-tailor
+TESTING=true /Users/alexyuan/Documents/job-auto-apply/.venv/bin/python -m pytest tests/ -q
 ```
 
 > Note: PDF compilation (`latex_compiler.py`) requires TeX Live, which is only available in the Docker container. Run `tailor` in Docker when testing resume tailoring end-to-end.
+
+> Note: the LLM engine (Claude) needs the `claude` CLI + a subscription OAuth token. Tests stub the LLM (`StubProvider`), so the suite runs without any token. See "AI Agents & LLM Engine" below.
 
 ## Architecture
 
@@ -37,7 +43,7 @@ AutoCareer is a self-hosted job automation platform with 4 Docker Compose servic
 | Service    | Port | Stack                                                   | Role                           |
 | ---------- | ---- | ------------------------------------------------------- | ------------------------------ |
 | `frontend` | 3000 | Next.js 14, React 19, TypeScript, Tailwind, shadcn/ui   | Web UI                         |
-| `tailor`   | 8000 | Python 3.11, FastAPI, SQLModel, Google Gemini, TeX Live | Main API + AI                  |
+| `tailor`   | 8000 | Python 3.11, FastAPI, SQLModel, Claude (Agent SDK), TeX Live | Main API + AI             |
 | `scraper`  | 8001 | Python 3.11, FastAPI, Playwright                        | Headless browser for job pages |
 | `postgres` | 5432 | PostgreSQL 15                                           | Persistence                    |
 
@@ -46,14 +52,20 @@ AutoCareer is a self-hosted job automation platform with 4 Docker Compose servic
 ### Key Source Files
 
 - `backend/services/resume-tailor/server.py` — All FastAPI endpoints (14 routes)
-- `backend/services/resume-tailor/core/agents.py` — 4 AI agents (Discovery, Scoring, Parsing, Tailoring)
-- `backend/services/resume-tailor/core/llm_client.py` — Gemini API client with structured output via Pydantic, retry/backoff
+- `backend/services/resume-tailor/core/agents.py` — 4 AI agents (Discovery, Scoring, Parsing, Tailoring); each depends only on the `LLMProvider` interface
+- `backend/services/resume-tailor/core/llm_providers.py` — **The LLM engine.** `LLMProvider` ABC + `ClaudeAgentProvider` (default), `GeminiProvider` (fallback), `StubProvider` (tests), and `create_default_provider()` factory
+- `backend/services/resume-tailor/core/models.py` — Pydantic schemas the agents request as structured output: `JobPosting`, `DiscoveredJob`, `DiscoveryResult`, `JobScore`
+- `backend/services/resume-tailor/core/resume_model.py` — `ResumeContent` and friends: the structured resume schema (validated, length-constrained) the tailor agent produces
+- `backend/services/resume-tailor/core/resume_renderer.py` — `render_resume()`: deterministic Jinja2 → LaTeX rendering with full escaping (the LLM never emits LaTeX)
+- `backend/services/resume-tailor/core/startup.py` — Startup health checks (DB, migrations, LLM auth, scraper, pdflatex)
 - `backend/services/resume-tailor/database.py` — SQLModel ORM models and backend selection: `Settings`, `JobSource`, `Job`
 - `backend/services/resume-tailor/core/db_sync.py` — PostgreSQL/SQLite reconciliation and one-time migration helpers
 - `backend/scripts/migrate_postgres_to_sqlite.py` — One-time export from PostgreSQL to SQLite
 - `backend/services/job-scraper/main.py` — `POST /scrape` endpoint using Playwright
 - `frontend/lib/api.ts` — Typed client for all backend endpoints
-- `backend/services/resume-tailor/data/master.tex` — Master LaTeX resume template
+- `backend/services/resume-tailor/data/master_resume.json` — **Master resume content pool** (structured JSON, source of truth for tailoring/scoring)
+- `backend/services/resume-tailor/data/resume_template.tex.j2` — Jinja2 LaTeX template (Jake Gutierrez layout; `<< >>`/`<% %>` delimiters, `| tex` escape filter)
+- `backend/services/resume-tailor/data/master.tex` — Legacy LaTeX resume, kept as visual reference only (still checked by the `master_resume_presence` startup check via `MASTER_RESUME_PATH`)
 
 ### Job Status Lifecycle
 
@@ -63,14 +75,42 @@ suggested → processing → applied → interviewing → offer
           dismissed (user action)
 ```
 
-### AI Agents
+### AI Agents & LLM Engine
 
-All agents call Google Gemini via `llm_client.py` using Pydantic-enforced JSON schemas:
+Agents never talk to a model SDK directly — they depend on the `LLMProvider` interface in
+`core/llm_providers.py` and call `generate_structured(...)` (Pydantic-schema JSON) or
+`generate_text(...)`. To change or add a model engine, implement a new `LLMProvider` and wire it
+into `create_default_provider()`; **no agent code should change.**
+
+Provider selection (factory in `core/llm_providers.py`):
+
+- `LLM_PROVIDER=claude` (default) → `ClaudeAgentProvider` — runs on a **Claude subscription** via the
+  `claude-agent-sdk`, authenticated by `CLAUDE_CODE_OAUTH_TOKEN` (no per-token API billing). The SDK
+  shells out to the `claude` CLI subprocess, so calls are heavier/slower than an HTTP API (~3–13s
+  each). Structured output uses the SDK's `output_format` json-schema → `ResultMessage.structured_output`.
+- `LLM_PROVIDER=gemini` → `GeminiProvider` — legacy fallback, needs `GOOGLE_API_KEY`.
+- `RESUME_TAILOR_LLM_MODE` in `{stub,test,offline}` → `StubProvider` — deterministic, used by tests.
+
+> `core/llm_client.py` is a **deprecated** standalone Gemini client and is no longer imported — do not extend it; use `core/llm_providers.py`.
+
+The four agents (all in `core/agents.py`):
 
 1. **JobDiscoveryAgent** — Parses source HTML, extracts job listings, applies user filter
 2. **JobScoringAgent** — Scores each discovered job 0–100 against master resume
 3. **JobParsingAgent** — Extracts structured requirements from a full job description
-4. **ResumeTailorAgent** — Rewrites LaTeX resume sections to match a specific job
+4. **ResumeTailorAgent** — Selects/rewords the most relevant subset of the master pool for a specific job (structured output against the `ResumeContent` schema — never raw LaTeX)
+
+### Resume Generation Pipeline
+
+```
+data/master_resume.json → ResumeContent (Pydantic, core/resume_model.py)
+  → ResumeTailorAgent.tailor(master, job)   # LLM selects/rewords, structured output
+  → _enforce_budget()                        # header restored verbatim; hard caps: 5 experiences, 5 projects, 5/3 bullets, 5 skill groups
+  → render_resume() (core/resume_renderer.py + data/resume_template.tex.j2)  # deterministic, escaped LaTeX
+  → latex_compiler.py → PDF
+```
+
+The LLM never writes LaTeX; all values are escaped by the renderer, so output is always compilable. The scoring agent uses the same pool via `ResumeContent.to_plain_text()`.
 
 ### Suggestions Scan (Parallel Processing)
 
@@ -105,7 +145,10 @@ with Session(engine) as session:
 **Backend** (`.env` at repo root, loaded by `tailor` service):
 
 ```
-GOOGLE_API_KEY=xxx                  # Required - Gemini API
+LLM_PROVIDER=claude                 # claude (default) | gemini
+CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...   # Required when LLM_PROVIDER=claude; from `claude setup-token`
+CLAUDE_MODEL=sonnet                 # sonnet | haiku | opus | claude-sonnet-4-6 ...
+GOOGLE_API_KEY=xxx                  # Required only when LLM_PROVIDER=gemini
 DATABASE_BACKEND=hybrid             # postgres | sqlite | hybrid
 SQLITE_DATABASE_URL=sqlite:///./backend/services/resume-tailor/data/autocareer.db
 POSTGRES_DATABASE_URL=postgresql://user:password@postgres:5432/autocareer
@@ -113,11 +156,20 @@ DB_SYNC_ENABLED=true
 SYNC_ON_BOOT=true
 SYNC_ON_SHUTDOWN=true
 SCRAPER_SERVICE_URL=http://scraper:8001
-MASTER_RESUME_PATH=./data/master.tex
+MASTER_RESUME_JSON_PATH=./data/master_resume.json   # structured content pool used for tailoring/scoring
+MASTER_RESUME_PATH=./data/master.tex                 # legacy reference; only the startup presence check reads it
 RATE_LIMIT_DELAY=0.2
 MAX_CONCURRENT_SOURCES=5
 MAX_CONCURRENT_JOBS=10
 ```
+
+> **Do not set `ANTHROPIC_API_KEY`** in the `tailor` process — it shadows `CLAUDE_CODE_OAUTH_TOKEN`
+> and silently bills pay-per-token instead of the subscription. The `claude_auth_configured` startup
+> health check fails fast if it is present.
+>
+> Generate the token once on the host with `claude setup-token` (requires a Claude Pro/Max plan),
+> then put it in `.env`. The Docker image installs Node + `@anthropic-ai/claude-code` so the SDK's
+> CLI subprocess exists in-container.
 
 **Frontend** (`frontend/.env.local`):
 
@@ -133,6 +185,9 @@ For hybrid mode or data portability, use `backend/scripts/migrate_postgres_to_sq
 
 ## Testing Gotchas
 
+- Tests run on the **repo-root `.venv`** (no per-service venv); run with `TESTING=true` to skip DB/lifespan side effects.
+- Tests use `StubProvider`, so no Claude/Gemini token is needed to run the suite.
 - Scraper is blocked by some job sites — test with different URLs
 - AI responses are non-deterministic — verify output quality manually
-- PDF compilation fails silently if LaTeX is malformed — check `docker-compose logs tailor`
+- Claude calls go through the `claude` CLI subprocess, so each is ~3–13s; a suggestions scan does `1 + N` calls per source — expect scans slower than the old Gemini HTTP path
+- Generated LaTeX is always compilable (fixed template + escaping); if pdflatex fails, the bug is in `data/resume_template.tex.j2` — check `docker-compose logs tailor`

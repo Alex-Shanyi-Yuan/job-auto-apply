@@ -11,10 +11,13 @@ import logging
 import asyncio
 from pathlib import Path
 from sqlmodel import Session, select
+from sqlalchemy.exc import IntegrityError
 from contextlib import asynccontextmanager
 
 from database import create_db_and_tables, get_session, Job, JobSource, JobStage, Settings, engine, utcnow
 from core import JobParsingAgent, ResumeTailorAgent, JobDiscoveryAgent, JobScoringAgent, compile_pdf
+from core.resume_model import ResumeContent
+from core.resume_renderer import render_resume
 from core.db_sync import reconcile_postgres_and_sqlite
 from core.site_plugins import resolve_job_url
 from core.event_bus import event_bus, EventType, JobEvent
@@ -113,6 +116,7 @@ app.add_middleware(
 # Configuration
 SCRAPER_SERVICE_URL = os.getenv("SCRAPER_SERVICE_URL", "http://scraper:8001")
 MASTER_RESUME_PATH = os.getenv("MASTER_RESUME_PATH", "./data/master.tex")
+MASTER_RESUME_JSON_PATH = os.getenv("MASTER_RESUME_JSON_PATH", "./data/master_resume.json")
 RATE_LIMIT_DELAY = float(os.getenv("RATE_LIMIT_DELAY", "0.2"))  # Seconds between scrapes (reduced for speed)
 MAX_CONCURRENT_SOURCES = int(os.getenv("MAX_CONCURRENT_SOURCES", "5"))  # Max parallel source scans
 MAX_CONCURRENT_JOBS = int(os.getenv("MAX_CONCURRENT_JOBS", "10"))  # Max parallel job scrapes per source
@@ -336,6 +340,49 @@ def load_master_resume(file_path: str) -> str:
         return f.read()
 
 
+def load_master_resume_content(file_path: str) -> ResumeContent:
+    """Load the structured master resume (the full content pool) from JSON."""
+    path = Path(file_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Master resume JSON not found: {file_path}")
+    with open(path, 'r', encoding='utf-8') as f:
+        return ResumeContent.model_validate_json(f.read())
+
+
+async def scrape_url(url: str, fmt: str = "text", timeout: float = 60.0, max_retries: int = 2) -> dict:
+    """POST to the scraper service with exponential backoff on transient failures.
+
+    Retries timeouts, connection errors and 5xx responses (a scraper restart or
+    blip shouldn't permanently fail a job); 4xx and other errors are raised
+    immediately. Returns the parsed JSON body (with a ``text`` field).
+    """
+    last_exc: Optional[Exception] = None
+    for attempt in range(max_retries + 1):
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{SCRAPER_SERVICE_URL}/scrape",
+                    json={"url": url, "format": fmt},
+                    timeout=timeout,
+                )
+            response.raise_for_status()
+            return response.json()
+        except (httpx.TimeoutException, httpx.TransportError, httpx.HTTPStatusError) as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            retryable = not isinstance(exc, httpx.HTTPStatusError) or (status is not None and status >= 500)
+            last_exc = exc
+            if retryable and attempt < max_retries:
+                logger.warning(
+                    "Scrape attempt %d/%d for %s failed (%s); retrying",
+                    attempt + 1, max_retries + 1, url, exc,
+                )
+                await asyncio.sleep(2 ** attempt)
+                continue
+            raise
+    assert last_exc is not None
+    raise last_exc
+
+
 def ensure_applied_stage(session: Session, job_id: int) -> JobStage:
     """Ensure a job has a completed 'applied' stage without creating duplicates."""
     applied_stage = session.exec(
@@ -423,11 +470,8 @@ async def process_application(job_id: int, url: str):
                 )
             )
             logger.debug(f"Scraping URL: {url}")
-            async with httpx.AsyncClient() as client:
-                response = await client.post(f"{SCRAPER_SERVICE_URL}/scrape", json={"url": url}, timeout=60.0)
-                response.raise_for_status()
-                data = response.json()
-                raw_text = data["text"]
+            data = await scrape_url(url, fmt="text")
+            raw_text = data["text"]
             logger.debug("Scraping completed successfully")
             await event_bus.emit(
                 JobEvent(
@@ -510,7 +554,8 @@ async def process_application(job_id: int, url: str):
                 )
             )
             logger.debug("Tailoring resume")
-            master_latex = load_master_resume(MASTER_RESUME_PATH)
+            master_content = load_master_resume_content(MASTER_RESUME_JSON_PATH)
+            master_latex = render_resume(master_content)
             pre_hook_summary = await hook_runner.run_pre_hooks(
                 job_id=job_id,
                 step=current_step,
@@ -523,13 +568,15 @@ async def process_application(job_id: int, url: str):
             tailor_agent = ResumeTailorAgent()
             while True:
                 try:
-                    tailored_latex = await asyncio.to_thread(tailor_agent.tailor, master_latex, job_posting)
+                    # The LLM returns structured content; we render it to LaTeX
+                    # deterministically, so the output is always compilable.
+                    tailored_content = await asyncio.to_thread(tailor_agent.tailor, master_content, job_posting)
+                    tailored_latex = render_resume(tailored_content)
                     post_hook_summary = await hook_runner.run_post_hooks(
                         job_id=job_id,
                         step=current_step,
                         hooks=post_tailor_hooks,
                         payload={
-                            "master_latex": master_latex,
                             "tailored_latex": tailored_latex,
                             "url": url,
                         },
@@ -743,15 +790,8 @@ async def process_single_source(
         
         try:
             # 1. Scrape the search results page (HTML format)
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{SCRAPER_SERVICE_URL}/scrape",
-                    json={"url": source_url, "format": "html"},
-                    timeout=60.0
-                )
-                response.raise_for_status()
-                data = response.json()
-                html_content = data["text"]
+            data = await scrape_url(source_url, fmt="html")
+            html_content = data["text"]
             
             # 2. Discover jobs using AI with combined filter
             combined_filter = get_combined_filter(source_filter_prompt)
@@ -807,15 +847,8 @@ async def process_single_source(
                     score = None
                     if scoring_agent and master_resume:
                         try:
-                            async with httpx.AsyncClient() as client:
-                                job_response = await client.post(
-                                    f"{SCRAPER_SERVICE_URL}/scrape",
-                                    json={"url": dj.url, "format": "text"},
-                                    timeout=60.0
-                                )
-                                job_response.raise_for_status()
-                                job_text = job_response.json()["text"]
-                                
+                            job_text = (await scrape_url(dj.url, fmt="text"))["text"]
+
                             # Score the job in thread pool to avoid blocking event loop
                             job_score = await asyncio.to_thread(scoring_agent.score, job_text, master_resume)
                             score = job_score.score
@@ -871,7 +904,21 @@ async def process_single_source(
                             source_id=source_id
                         )
                         session.add(new_job)
-                        session.commit()
+                        try:
+                            session.commit()
+                        except IntegrityError:
+                            # A concurrent scan or apply inserted this URL first;
+                            # the unique constraint protects us — treat as existing.
+                            session.rollback()
+                            source_result["jobs_skipped"] += 1
+                            source_result["skipped_jobs"].append({
+                                "title": dj.title,
+                                "company": dj.company,
+                                "url": dj.url,
+                                "score": score,
+                                "skip_reason": "already_exists",
+                            })
+                            continue
                         session.refresh(new_job)
                         
                         # Track in report - low score jobs go to skipped, others to added
@@ -974,11 +1021,12 @@ async def process_job_discovery(source_ids: Optional[List[int]] = None):
         scan_status["sources_total"] = len(source_data)
         scan_status["current_step"] = "scanning sources in parallel"
         
-        # Load master resume once for scoring
+        # Load master resume once for scoring (structured content -> plain text,
+        # so the JSON pool is the single source of truth).
         try:
-            master_resume = load_master_resume(MASTER_RESUME_PATH)
-        except FileNotFoundError:
-            logger.error("Master resume not found, skipping scoring")
+            master_resume = load_master_resume_content(MASTER_RESUME_JSON_PATH).to_plain_text()
+        except (FileNotFoundError, ValueError) as exc:
+            logger.error("Master resume JSON unavailable, skipping scoring: %s", exc)
             master_resume = None
         
         # Create agents (they are stateless, can be shared)

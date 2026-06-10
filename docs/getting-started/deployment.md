@@ -43,7 +43,9 @@ User → frontend:3000 → tailor:8000 → scraper:8001
    ```bash
    # Copy example (if provided) or create manually
    cp .env.example .env
-   vi .env  # Add your GOOGLE_API_KEY
+   vi .env  # Set LLM_PROVIDER=claude and CLAUDE_CODE_OAUTH_TOKEN (run `claude setup-token` on the host first)
+            # Do NOT set ANTHROPIC_API_KEY — it shadows the OAuth token and the startup check rejects it.
+            # Gemini fallback: set LLM_PROVIDER=gemini and GOOGLE_API_KEY instead.
    
    # Frontend config
    echo "NEXT_PUBLIC_API_URL=http://localhost:8000" > frontend/.env.local
@@ -330,18 +332,19 @@ NEXT_PUBLIC_API_URL=http://localhost:8002
 
 ### Missing Environment Variables
 
-**Symptom:**
-```
-tailor | Error: GOOGLE_API_KEY environment variable not set
-```
+**Symptom (Claude, default provider):** the `tailor` `claude_auth_configured` startup check fails, or agents cannot authenticate.
 
 **Solution:**
 1. Check `.env` file exists at repository root
-2. Verify variable is set:
+2. Verify the OAuth token is set:
    ```bash
-   cat .env | grep GOOGLE_API_KEY
+   cat .env | grep CLAUDE_CODE_OAUTH_TOKEN
    ```
-3. Restart service:
+3. Ensure `ANTHROPIC_API_KEY` is **not** set (it shadows the OAuth token and is rejected by the startup check):
+   ```bash
+   cat .env | grep ANTHROPIC_API_KEY   # should return nothing
+   ```
+4. Restart service:
    ```bash
    docker-compose restart tailor
    ```
@@ -349,8 +352,18 @@ tailor | Error: GOOGLE_API_KEY environment variable not set
 **Debugging:**
 ```bash
 # Check if env var is visible inside container
-docker-compose exec tailor env | grep GOOGLE_API_KEY
+docker-compose exec tailor env | grep CLAUDE_CODE_OAUTH_TOKEN
 ```
+
+**Symptom (Gemini fallback):**
+```
+tailor | Error: GOOGLE_API_KEY environment variable not set
+```
+
+**Solution:**
+1. Confirm `LLM_PROVIDER=gemini` is set
+2. Verify the key is set: `cat .env | grep GOOGLE_API_KEY`
+3. Restart service: `docker-compose restart tailor`
 
 ### Database Connection Failed
 
@@ -485,8 +498,11 @@ docker-compose exec tailor curl http://scraper:8001/scrape -X POST \
   -d '{"url": "https://example.com"}'
 ```
 
-**Solution 2 — Check GOOGLE_API_KEY:**
+**Solution 2 — Check LLM auth:**
 ```bash
+# Claude (default provider)
+docker-compose exec tailor env | grep CLAUDE_CODE_OAUTH_TOKEN
+# Gemini fallback (only when LLM_PROVIDER=gemini)
 docker-compose exec tailor env | grep GOOGLE_API_KEY
 ```
 
@@ -547,13 +563,18 @@ tailor | ! Undefined control sequence. \section{Experience}
 ```
 
 **Solution:**
-Check `master.tex` syntax:
+Generated LaTeX comes from the fixed Jinja2 template, so a compile error points at the template (after a custom edit) or a missing TeX package. Reproduce by rendering and compiling the master pool:
 ```bash
+docker-compose exec tailor python -c "
+from server import load_master_resume_content
+from core.resume_renderer import render_resume
+open('/app/output/master_check.tex', 'w').write(render_resume(load_master_resume_content('./data/master_resume.json')))
+"
 docker-compose exec tailor pdflatex -interaction=nonstopmode \
-  -output-directory=/app/data /app/data/master.tex
+  -output-directory=/app/output /app/output/master_check.tex
 ```
 
-Fix LaTeX errors in `backend/services/resume-tailor/data/master.tex`.
+Fix template errors in `backend/services/resume-tailor/data/resume_template.tex.j2`.
 
 ### High Memory Usage
 

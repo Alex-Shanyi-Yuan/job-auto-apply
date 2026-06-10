@@ -9,6 +9,14 @@ RUN apt-get update && apt-get install -y \
     texlive-latex-extra \
     texlive-fonts-recommended \
     texlive-fonts-extra \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js (LTS) + the Claude Code CLI, which the claude-agent-sdk
+# spawns as a subprocess to drive inference against the Claude subscription.
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && npm install -g @anthropic-ai/claude-code \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory

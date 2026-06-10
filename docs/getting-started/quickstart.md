@@ -5,7 +5,7 @@ Get AutoCareer running locally in 5 minutes.
 ## Prerequisites
 
 - **Docker** and **Docker Compose** installed
-- **Google Gemini API key** ([Get one here](https://makersuite.google.com/app/apikey))
+- **Claude Pro/Max subscription** — install the Claude CLI and run `claude setup-token` once on your host to generate a `CLAUDE_CODE_OAUTH_TOKEN` (inference is billed against your subscription, no per-token cost)
 - **Git** for cloning the repository
 
 ## Installation Steps
@@ -25,11 +25,16 @@ Create the environment file:
 cp .env.example .env
 ```
 
-Edit `.env` and add your API key:
+Edit `.env` and add your Claude credentials:
 
 ```bash
-# Required
-GOOGLE_API_KEY=your_gemini_api_key_here
+# Required - Claude via the Claude Agent SDK (default provider)
+LLM_PROVIDER=claude
+CLAUDE_CODE_OAUTH_TOKEN=your_oauth_token_here
+# CLAUDE_MODEL=sonnet   # optional: sonnet (default) | haiku | opus
+
+# Legacy Gemini fallback (only when LLM_PROVIDER=gemini)
+# GOOGLE_API_KEY=your_gemini_api_key_here
 
 # Database (defaults work for local development)
 DATABASE_BACKEND=hybrid
@@ -44,15 +49,15 @@ See [Environment Setup](./environment-setup.md) for all configuration options.
 
 ### 3. Add Your Resume
 
-Edit your master resume template:
+Edit your master resume content pool (structured JSON — plain text, no LaTeX needed):
 
 ```bash
-nano backend/services/resume-tailor/data/master.tex
+nano backend/services/resume-tailor/data/master_resume.json
 ```
 
-Replace the template content with your own resume in LaTeX format.
+Fill in your header, education, skills, and **every** experience and project (with all bullets). The AI selects the most relevant subset per job, so be comprehensive rather than concise. See [Resume Tailoring](../features/resume-tailoring.md) for the full schema and an example.
 
-> **Tip**: If you don't have a LaTeX resume, you can convert from PDF using tools like [pdf2latex](https://github.com/lervag/vimtex) or use a template from [Overleaf](https://www.overleaf.com/gallery/tagged/cv).
+> **Tip**: The PDF layout comes from `data/resume_template.tex.j2` (the Jake Gutierrez LaTeX template). You only edit the JSON; the LaTeX is rendered automatically.
 
 ### 4. Start All Services
 

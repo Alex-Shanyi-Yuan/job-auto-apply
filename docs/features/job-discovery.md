@@ -22,7 +22,7 @@ The `JobDiscoveryAgent` is the core AI component that extracts job listings from
 **AI Prompt Strategy:**
 - Temperature set to 0.1 for consistent, deterministic extraction
 - HTML truncated to ~40k characters to fit within token limits
-- Uses Google Gemini Pro via structured output (Pydantic schemas)
+- Uses Claude via the `claude-agent-sdk` (default engine) with structured output (Pydantic schemas); Gemini remains as a legacy fallback
 - Handles both absolute and relative URLs (resolution happens later)
 
 ### Discovery Pipeline Flow
@@ -96,6 +96,12 @@ Both filters are concatenated and passed to the `JobDiscoveryAgent` prompt. The 
 ## Scraper Plugin Architecture
 
 AutoCareer uses a **plugin-based scraper system** to handle site-specific extraction logic. This design solves the problem of "one-size-fits-all" scraping that fails on diverse job boards.
+
+### Robustness
+
+- **Retries with backoff:** the `tailor` service calls the scraper through a `scrape_url()` wrapper (`server.py`) that retries timeouts, connection errors, and 5xx responses with exponential backoff; 4xx errors fail immediately.
+- **Guaranteed browser cleanup:** the scraper closes its Playwright browser in a `finally` block, so a failed navigation can't leak a Chrome process.
+- **Empty-content guard:** the scraper returns HTTP 502 if a page yields no content (likely a parse failure), instead of silently returning an empty string.
 
 ### Why Plugins?
 
@@ -238,7 +244,7 @@ A configurable delay between job page scrapes to avoid overwhelming job sites or
 With 3 sources, 50 jobs discovered per source, default settings:
 - **Sequential processing:** ~10 minutes
 - **With parallel processing:** ~2-3 minutes
-- **Bottleneck:** AI scoring API latency (Gemini Pro)
+- **Bottleneck:** AI scoring latency. The default Claude engine runs through the `claude` CLI subprocess (~3–13s per call), which is slower than the old Gemini HTTP path. A scan makes `1 + N` LLM calls per source (1 discovery call plus 1 scoring call per discovered job).
 
 ## URL Resolution
 
@@ -411,7 +417,7 @@ Exclude: [roles or industries to avoid]
 
 **"All jobs skipped as 'Already Existed'"**
 - This is normal for subsequent scans of the same source
-- Job URLs are unique – duplicate URLs are filtered out
+- Job URLs are unique — enforced by a unique database index on `job.url` (migration 007), so even concurrent scans of overlapping sources can't insert duplicates; a duplicate insert is caught and counted as skipped
 - Use a broader search or add new sources for fresh jobs
 
 **"All jobs skipped as 'Low Score'"**

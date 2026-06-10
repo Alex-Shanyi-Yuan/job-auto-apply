@@ -6,7 +6,7 @@ AutoCareer is a self-hosted job application automation platform built on a micro
 
 The platform emphasizes:
 - **Privacy-First Design**: All data stays on your machine, self-hosted
-- **AI-Powered Intelligence**: Google Gemini Pro for discovery, scoring, parsing, and tailoring
+- **AI-Powered Intelligence**: Claude (via the Claude Agent SDK) for discovery, scoring, parsing, and tailoring
 - **Parallel Processing**: Concurrent source scanning and job scoring for speed
 - **Modularity**: Independent microservices that can scale separately
 
@@ -53,7 +53,7 @@ User Browser → Frontend (3000) → Resume Tailor API (8000) → Job Scraper (8
 
 ### Resume Tailor Service (Port 8000)
 
-**Technology**: Python 3.11, FastAPI, SQLModel, Alembic, Google Gemini Pro, TeX Live
+**Technology**: Python 3.11, FastAPI, SQLModel, Alembic, Claude (Claude Agent SDK), TeX Live
 
 **Responsibilities**:
 - Serve 14 REST API endpoints for all operations
@@ -64,11 +64,11 @@ User Browser → Frontend (3000) → Resume Tailor API (8000) → Job Scraper (8
 - Handle database migrations via Alembic
 - Track job lifecycle and application status
 
-**AI Agents** (all use Google Gemini):
+**AI Agents** (all use Claude via the Claude Agent SDK, depending only on the `LLMProvider` interface):
 1. **JobDiscoveryAgent**: Parse source HTML → extract job listings → apply user filter
 2. **JobScoringAgent**: Compare job to resume → return score 0-100
 3. **JobParsingAgent**: Extract structured requirements from job description
-4. **ResumeTailorAgent**: Rewrite LaTeX resume sections to match job
+4. **ResumeTailorAgent**: Select/reword the most relevant subset of the master content pool (`data/master_resume.json`) for a job — structured `ResumeContent` output, rendered to LaTeX deterministically by `core/resume_renderer.py`
 
 **Parallel Processing**:
 - `MAX_CONCURRENT_SOURCES=5`: Scan up to 5 job sources simultaneously
@@ -134,7 +134,7 @@ User Browser → Frontend (3000) → Resume Tailor API (8000) → Job Scraper (8
 | FastAPI | High-performance async API framework with auto-generated docs |
 | SQLModel | Combines SQLAlchemy ORM with Pydantic validation |
 | Alembic | Database schema migration tool |
-| Google Gemini Pro | LLM for AI agents with structured output via Pydantic |
+| Claude (Claude Agent SDK) | LLM for AI agents with structured output via the SDK's `output_format` JSON schema, validated by Pydantic; selectable via `LLM_PROVIDER` (Gemini fallback) |
 | TeX Live (pdflatex) | LaTeX to PDF compilation for resumes |
 
 ### Backend Stack (Job Scraper)
@@ -314,10 +314,13 @@ This structure follows a **Monorepo pattern** orchestrated by Docker Compose.
         │   │
         │   ├── /core          # Business Logic
         │   │   ├── __init__.py
-        │   │   ├── agents.py      # 4 AI Agents (Discovery, Scoring, Parsing, Tailoring)
+        │   │   ├── agents.py      # 4 AI Agents (Discovery, Scoring, Parsing, Tailoring); depend only on LLMProvider
         │   │   ├── jd_scraper.py  # Job description fetching via scraper service
-        │   │   ├── llm_client.py  # Google Gemini API client with retry/backoff
+        │   │   ├── llm_providers.py  # LLMProvider ABC + ClaudeAgentProvider (default), GeminiProvider (fallback), StubProvider; create_default_provider()
+        │   │   ├── llm_client.py  # DEPRECATED (not imported) — legacy Gemini HTTP client; see llm_providers.py
         │   │   ├── models.py      # Pydantic data models for AI responses
+        │   │   ├── resume_model.py    # ResumeContent schema (structured resume data)
+        │   │   ├── resume_renderer.py # Deterministic Jinja2 → LaTeX rendering
         │   │   ├── latex_compiler.py  # pdflatex wrapper for PDF generation
         │   │   └── db_sync.py     # PostgreSQL/SQLite reconciliation
         │   │
@@ -329,14 +332,13 @@ This structure follows a **Monorepo pattern** orchestrated by Docker Compose.
         │   │       └── 003_add_settings_table.py
         │   │
         │   ├── /data
-        │   │   ├── master.tex     # Master LaTeX resume template
+        │   │   ├── master_resume.json      # Master resume content pool (source of truth)
+        │   │   ├── resume_template.tex.j2  # Jinja2 LaTeX template (Jake Gutierrez layout)
+        │   │   ├── master.tex     # Legacy LaTeX resume (visual reference only)
         │   │   └── autocareer.db  # SQLite database (if hybrid mode enabled)
         │   │
-        │   ├── /output        # Generated PDFs
-        │   │   └── job_*_resume.pdf
-        │   │
-        │   └── /templates
-        │       └── master.tex
+        │   └── /output        # Generated PDFs
+        │       └── job_*_resume.pdf
         │
         └── /job-scraper       # Scraper Service (Port 8001)
             ├── Dockerfile
@@ -368,7 +370,7 @@ AutoCareer uses HTTP REST APIs for all inter-service communication:
 │                   Python + FastAPI + SQLModel                    │
 │                                                                   │
 │  ┌──────────────────────────────────────────────────────────┐  │
-│  │              AI Agents (Google Gemini Pro)               │  │
+│  │         AI Agents (Claude via Claude Agent SDK)         │  │
 │  │  • JobDiscoveryAgent  • JobScoringAgent                  │  │
 │  │  • JobParsingAgent    • ResumeTailorAgent                │  │
 │  └──────────────────────────────────────────────────────────┘  │
@@ -392,7 +394,7 @@ AutoCareer uses HTTP REST APIs for all inter-service communication:
 └─────────────────────────────┘
 
 External Services:
-  • Google Gemini API (AI inference)
+  • Claude (via Claude Agent SDK → `claude` CLI subprocess; subscription auth)
   • Job Board Websites (scraping targets)
 ```
 
@@ -413,10 +415,12 @@ External Services:
    - Connection pooling via SQLAlchemy
    - Alembic migrations for schema changes
 
-4. **Resume Tailor → Google Gemini**:
-   - REST API calls via `llm_client.py`
-   - Pydantic models for structured JSON output
-   - Retry logic with exponential backoff
+4. **Resume Tailor → Claude (Claude Agent SDK)**:
+   - Calls go through the `LLMProvider` abstraction in `llm_providers.py` (`ClaudeAgentProvider` by default)
+   - The SDK shells out to the local `claude` CLI subprocess (Node + `@anthropic-ai/claude-code`)
+   - Structured output via the SDK's `output_format` JSON schema → `ResultMessage.structured_output`, validated into Pydantic models in `core/models.py`
+   - Subprocess startup makes each call ~3–13s — slower than a direct HTTP path, an accepted trade-off
+   - Authenticated by a Claude subscription via `CLAUDE_CODE_OAUTH_TOKEN` (no per-token billing)
 
 ### Data Flow Example (Job Discovery)
 
@@ -456,19 +460,24 @@ External Services:
 2. **SQLite**: Portability, easy backups, no external dependencies
 3. **Hybrid Mode**: Best of both worlds—develop with SQLite, deploy with PostgreSQL
 
-### Why Google Gemini?
+### Why Claude (subscription)?
 
-1. **Structured Output**: Native JSON mode with Pydantic validation
-2. **Long Context**: Can process entire job descriptions + resumes
-3. **Cost-Effective**: Generous free tier for experimentation
-4. **Performance**: Fast inference for real-time scoring
+1. **No Per-Token Cost**: Inference draws from an existing Claude Pro/Max subscription via `CLAUDE_CODE_OAUTH_TOKEN`, not pay-per-token API billing. Never set `ANTHROPIC_API_KEY` — it shadows the OAuth token and switches to pay-per-token; the `claude_auth_configured` startup check fails fast if it is present.
+2. **Structured Output**: The Claude Agent SDK's `output_format` JSON schema yields `structured_output`, validated into Pydantic models — reliable JSON without prompt-engineering.
+3. **Provider Abstraction Kept**: Agents depend only on the `LLMProvider` interface in `llm_providers.py`, so Gemini remains a documented fallback (`LLM_PROVIDER=gemini`, needs `GOOGLE_API_KEY`).
+4. **Trade-off (Latency)**: The SDK shells out to the `claude` CLI subprocess, so each call is ~3–13s — slower than the old direct Gemini HTTP path. We accept this for the subscription billing model and structured-output reliability.
 
 ### Why LaTeX for Resumes?
 
 1. **Professional Typography**: Superior to Word/PDF editors
 2. **Version Control**: Plain text, diffs work naturally
-3. **Programmability**: Easy to automate section rewrites
-4. **Consistency**: Guaranteed identical formatting across jobs
+3. **Consistency**: Guaranteed identical formatting across jobs
+
+### Why Structured Resume Data (Not LLM-Generated LaTeX)?
+
+1. **Always Compilable**: The LLM produces a validated `ResumeContent` (Pydantic, `core/resume_model.py`); a fixed Jinja2 template (`data/resume_template.tex.j2`) renders it with every value LaTeX-escaped — eliminating the unbalanced-brace/unescaped-character failure class.
+2. **Trustworthy Output**: Deterministic guardrails restore the header verbatim and cap content (5 experiences, 5 projects, bullet limits) for a one-page result no matter what the model returns.
+3. **One Source of Truth**: `data/master_resume.json` feeds both tailoring and job scoring (via `ResumeContent.to_plain_text()`).
 
 ## Performance Characteristics
 
@@ -481,7 +490,7 @@ External Services:
 ### Rate Limiting
 
 - **Scraper Delay**: 0.2 seconds between requests (configurable via `RATE_LIMIT_DELAY`)
-- **AI Retry Logic**: Exponential backoff on Gemini API failures
+- **AI Retry Logic**: Exponential backoff on LLM call failures (handled within the active `LLMProvider`)
 - **Browser Reuse**: Playwright keeps Chrome instance alive across requests
 
 ### Typical Scan Times
@@ -495,7 +504,7 @@ External Services:
 ## Security Considerations
 
 1. **Self-Hosted**: All data stays on user's machine, no cloud storage
-2. **API Keys**: Google Gemini key stored in environment variables only
+2. **Credentials**: Claude subscription `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) stored in environment variables only; never set `ANTHROPIC_API_KEY` (it shadows the token and enables pay-per-token billing). The Gemini fallback uses `GOOGLE_API_KEY` if `LLM_PROVIDER=gemini`.
 3. **No External Webhooks**: No outbound callbacks to third parties
 4. **Docker Isolation**: Services run in isolated containers
 5. **Database Access**: PostgreSQL not exposed to public internet (port 5432 internal only)
@@ -504,7 +513,7 @@ External Services:
 
 The architecture supports these future enhancements:
 
-1. **Additional AI Providers**: `llm_client.py` abstracts Gemini; swap for OpenAI/Claude
+1. **Additional AI Providers**: The `LLMProvider` abstraction in `llm_providers.py` makes engines swappable — the Claude migration is already done this way (`ClaudeAgentProvider` default, `GeminiProvider` fallback, `StubProvider` for tests); adding OpenAI or local LLMs is a matter of implementing the interface
 2. **More Scrapers**: Add Indeed-specific, LinkedIn-specific scrapers as separate services
 3. **Email Integration**: New service for automatic application submission
 4. **Mobile App**: Same REST API can serve iOS/Android clients

@@ -6,7 +6,12 @@ from sqlmodel.pool import StaticPool
 
 import server
 from database import SQLModel, get_session
-from core.startup import StartupCheck, StartupHealthRunner
+from core.startup import (
+    StartupCheck,
+    StartupHealthRunner,
+    _check_claude_auth_configured,
+    default_startup_checks,
+)
 
 
 @pytest.fixture(name="session")
@@ -184,3 +189,51 @@ async def test_lifespan_raises_when_fail_fast_and_critical(monkeypatch):
     with pytest.raises(RuntimeError, match="Startup health checks failed"):
         async with server.lifespan(server.app):
             pass
+
+
+def test_claude_auth_check_passes_with_token(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-real")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    ok, message, _ = _check_claude_auth_configured()
+
+    assert ok is True
+    assert "configured" in message
+
+
+def test_claude_auth_check_fails_without_token(monkeypatch):
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+
+    ok, message, _ = _check_claude_auth_configured()
+
+    assert ok is False
+    assert "CLAUDE_CODE_OAUTH_TOKEN" in message
+
+
+def test_claude_auth_check_fails_when_api_key_present(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-real")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api-shadow")
+
+    ok, message, _ = _check_claude_auth_configured()
+
+    assert ok is False
+    assert "ANTHROPIC_API_KEY" in message
+
+
+def test_default_checks_use_claude_by_default(monkeypatch):
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+
+    names = [check.name for check in default_startup_checks()]
+
+    assert "claude_auth_configured" in names
+    assert "claude_cli_available" in names
+    assert "gemini_api_key_configured" not in names
+
+
+def test_default_checks_use_gemini_when_selected(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+
+    names = [check.name for check in default_startup_checks()]
+
+    assert "gemini_api_key_configured" in names
+    assert "claude_auth_configured" not in names

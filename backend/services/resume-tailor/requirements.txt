@@ -1,9 +1,11 @@
 # Core dependencies for Resume Tailor CLI
 requests>=2.31.0
 beautifulsoup4>=4.12.0
-google-genai
+claude-agent-sdk          # Default LLM engine (Claude subscription via OAuth token)
+google-genai              # Fallback LLM engine (set LLM_PROVIDER=gemini)
 python-dotenv>=1.0.0
 pydantic>=2.0.0
+jinja2>=3.1.0            # Deterministic LaTeX rendering of structured resume content
 
 # Web Service & Database
 fastapi

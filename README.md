@@ -20,10 +20,13 @@ cd job-auto-apply
 
 # 2. Configure environment
 cp .env.example .env
-# Edit .env and add your GOOGLE_API_KEY
+# Generate a Claude subscription token on the host:
+claude setup-token
+# Edit .env and set CLAUDE_CODE_OAUTH_TOKEN to that token
+# (do NOT set ANTHROPIC_API_KEY - it would bill pay-per-token)
 
-# 3. Add your resume
-nano backend/services/resume-tailor/data/master.tex
+# 3. Add your resume content (structured JSON pool of all your experience/projects/skills)
+nano backend/services/resume-tailor/data/master_resume.json
 
 # 4. Start all services
 docker-compose up --build
@@ -47,7 +50,7 @@ See **[docs/](./docs/)** for complete documentation:
 
 - **Frontend**: Next.js 14, TypeScript, Tailwind CSS, shadcn/ui
 - **Backend**: Python 3.11, FastAPI, SQLModel
-- **AI**: Google Gemini Pro
+- **AI**: Claude (via Claude Agent SDK, subscription auth)
 - **Database**: PostgreSQL / SQLite (hybrid mode supported)
 - **PDF**: TeX Live (pdflatex)
 

@@ -15,10 +15,10 @@ AutoCareer includes AI-powered components (job discovery, scoring, parsing, tail
 
 ### What is Stub Mode?
 
-Stub mode replaces Google Gemini API calls with **mock responses**. This allows you to:
+Stub mode replaces real LLM calls (Claude or Gemini) with **mock responses**. This allows you to:
 
-- ✅ Test agent logic without API costs
-- ✅ Develop offline or without API keys
+- ✅ Test agent logic without invoking the LLM
+- ✅ Develop offline or without credentials configured
 - ✅ Run fast, deterministic tests
 - ✅ Debug edge cases (e.g., malformed responses)
 
@@ -37,21 +37,23 @@ RESUME_TAILOR_LLM_MODE=stub uvicorn server:app --reload --port 8000
 
 **In `.env`:**
 ```bash
-RESUME_TAILOR_LLM_MODE=stub
+RESUME_TAILOR_LLM_MODE=stub   # accepts: stub | test | offline
 ```
 
 ### How Stub Mode Works
 
-The `LLMClient` in `core/llm_client.py` checks the mode:
+`create_default_provider()` in `core/llm_providers.py` inspects `RESUME_TAILOR_LLM_MODE`. When it is set to `stub`, `test`, or `offline`, the factory returns a `StubProvider` (an implementation of the `LLMProvider` interface) instead of the real `ClaudeAgentProvider` (default) or `GeminiProvider` (fallback):
 
 ```python
-if self.mode == "stub":
-    return self._generate_stub_response(response_model)
-else:
-    return await self._call_gemini_api(prompt, response_model)
+def create_default_provider() -> LLMProvider:
+    mode = os.getenv("RESUME_TAILOR_LLM_MODE", "").lower()
+    if mode in ("stub", "test", "offline"):
+        return StubProvider()
+    # otherwise selected by LLM_PROVIDER: "claude" (default) | "gemini"
+    ...
 ```
 
-**Stub responses** are hardcoded examples that match the Pydantic schema:
+**Stub responses** are deterministic objects (no network calls) that match the Pydantic schema:
 
 ```python
 def _generate_stub_response(self, response_model):
@@ -82,7 +84,7 @@ curl -X POST http://localhost:8000/suggestions/refresh \
 - Discovery agent returns mock jobs
 - Scoring agent assigns score of 85 to all jobs
 - Jobs saved to database with `status="suggested"`
-- No API calls made (check logs for absence of Gemini requests)
+- No LLM calls made (check logs for absence of `claude` CLI subprocess invocations or Gemini requests)
 
 **Verify:**
 ```bash
@@ -109,7 +111,7 @@ curl -X POST http://localhost:8000/apply \
 
 ### Customizing Stub Responses
 
-Edit `core/llm_client.py` to return custom stub data:
+Edit `StubProvider` in `core/llm_providers.py` to return custom stub data:
 
 ```python
 def _generate_stub_response(self, response_model):
@@ -347,6 +349,8 @@ docker-compose exec postgres psql -U postgres -d autocareer -c "SELECT * FROM jo
 
 ### Testing Structured Output
 
+With the default Claude provider, structured output comes from the Claude Agent SDK (`output_format` JSON schema → `ResultMessage.structured_output`), which is then validated into the **Pydantic models** in `core/models.py`. Stub mode returns these models directly with no network call.
+
 Agents use **Pydantic models** to enforce JSON schemas:
 
 ```python
@@ -402,20 +406,29 @@ curl -X POST http://localhost:8000/suggestions/refresh
 docker-compose logs -f tailor | grep "Rate limit"
 ```
 
-## Future: Unit Tests
+## Unit Tests
 
-**Planned test structure:**
+**Current test structure:**
 
 ```
 backend/services/resume-tailor/
 └── tests/
-    ├── test_agents.py           # Agent logic tests
-    ├── test_api.py              # FastAPI endpoint tests
-    ├── test_database.py         # SQLModel CRUD tests
-    ├── test_llm_client.py       # LLM client tests (with mocks)
-    └── fixtures/
-        ├── sample_job_html.html
-        └── sample_resume.tex
+    ├── test_db_sync.py              # PostgreSQL ↔ SQLite reconciliation
+    ├── test_event_bus.py            # SSE event bus
+    ├── test_hooks.py                # Pre/post tailoring hooks
+    ├── test_job_stages.py           # Job stage lifecycle
+    ├── test_llm_providers.py        # LLM providers (StubProvider, factory selection, Claude auth)
+    ├── test_resume_renderer.py      # LaTeX escaping, template rendering, ResumeContent validation
+    ├── test_site_plugins.py         # Scraper site plugins
+    ├── test_startup.py              # Startup health checks
+    └── test_tailor_and_robustness.py # Tailor agent budget/header guardrails, timeouts, job URL uniqueness
+```
+
+**Run tests from the repo-root virtualenv** (there is no per-service venv) with `TESTING=true`:
+
+```bash
+cd backend/services/resume-tailor && \
+  TESTING=true ../../../.venv/bin/python -m pytest tests/ -q
 ```
 
 **Example unit test (pytest):**
@@ -423,9 +436,10 @@ backend/services/resume-tailor/
 ```python
 import pytest
 from core.agents import JobScoringAgent, JobScoringOutput
+from core.llm_providers import StubProvider
 
 def test_scoring_agent_stub_mode():
-    agent = JobScoringAgent(llm_client=StubLLMClient())
+    agent = JobScoringAgent(client=StubProvider())  # constructor param is `client: Optional[LLMProvider]`
     result = agent.score_job(job_description="...", resume="...")
     
     assert isinstance(result, JobScoringOutput)
@@ -500,9 +514,9 @@ echo "NEXT_PUBLIC_API_URL=http://localhost:8000" > frontend/.env.local
 cd frontend && npm run dev
 ```
 
-### Stub mode still calling Gemini API
+### Stub mode still calling the real LLM
 
-**Cause:** Environment variable not set correctly
+**Cause:** Environment variable not set correctly (must be `stub`, `test`, or `offline`)
 
 **Fix:**
 ```bash
@@ -551,14 +565,16 @@ time curl -X POST http://localhost:8000/suggestions/refresh
 docker-compose logs tailor | grep "Scan completed"
 ```
 
-### Monitor API costs
+### Monitor LLM usage
 
 ```bash
-# Count API calls in logs
-docker-compose logs tailor | grep "Gemini API call" | wc -l
+# Count LLM calls in logs
+docker-compose logs tailor | grep -E "LLM call|claude" | wc -l
 
-# Estimate cost
-# Gemini Pro: ~$0.00025 per 1K input tokens, ~$0.0005 per 1K output tokens
+# Note: with the default Claude provider, inference is billed against your
+# Claude Pro/Max subscription (authenticated via CLAUDE_CODE_OAUTH_TOKEN),
+# so there is no per-token API cost to estimate. The legacy Gemini provider
+# (LLM_PROVIDER=gemini) uses per-token Google API billing.
 ```
 
 ### Database query performance

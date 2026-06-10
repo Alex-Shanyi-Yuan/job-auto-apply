@@ -32,7 +32,7 @@ class JobSource(SQLModel, table=True):
 class Job(SQLModel, table=True):
     """Represents a job application or suggestion."""
     id: Optional[int] = Field(default=None, primary_key=True)
-    url: str
+    url: str = Field(index=True, unique=True)  # one row per job URL
     company: str
     title: str
     status: str = "suggested"  # suggested, processing, active, rejected, dismissed, failed

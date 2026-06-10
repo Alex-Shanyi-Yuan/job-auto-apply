@@ -33,8 +33,16 @@ services:
       - SYNC_ON_BOOT=${SYNC_ON_BOOT:-true}
       - SYNC_ON_SHUTDOWN=${SYNC_ON_SHUTDOWN:-true}
       - SCRAPER_SERVICE_URL=http://scraper:8001
+      # LLM engine: claude (default, uses your subscription) | gemini (fallback)
+      - LLM_PROVIDER=${LLM_PROVIDER:-claude}
+      # Claude subscription auth — generate with `claude setup-token`.
+      # NOTE: ANTHROPIC_API_KEY is intentionally NOT passed; if set it would
+      # shadow the OAuth token and bill pay-per-token instead of the plan.
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-sonnet}
+      # Gemini fallback key (only used when LLM_PROVIDER=gemini)
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
-      - DEBUG=true 
+      - DEBUG=true
     volumes:
       - ./backend/services/resume-tailor/data:/app/data
       - ./backend/services/resume-tailor/output:/app/output

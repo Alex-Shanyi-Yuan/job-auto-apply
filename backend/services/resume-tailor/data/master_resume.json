@@ -1,0 +1,202 @@
+{
+  "header": {
+    "name": "Alex Yuan",
+    "phone": "+1 647-573-0588",
+    "email": "alexsy.yuan@mail.utoronto.ca",
+    "links": [
+      { "label": "linkedin.com/in/alex-shanyi-yuan/", "url": "https://www.linkedin.com/in/alex-shanyi-yuan/" },
+      { "label": "github.com/Alex-Shanyi-Yuan", "url": "https://github.com/Alex-Shanyi-Yuan" }
+    ],
+    "citizenship": "Citizenship: Canada (TN visa eligible for U.S. employment)"
+  },
+  "education": [
+    {
+      "institution": "University of Toronto",
+      "location": "Toronto, ON",
+      "degree": "Bachelor of Applied Science in Computer Engineering",
+      "dates": "Sept. 2021 -- May 2026",
+      "highlights": ["Minor in Artificial Intelligence & Business (GPA: 3.75/4.0)"]
+    }
+  ],
+  "skills": [
+    { "category": "Languages", "items": ["Java", "Python", "C/C++", "Golang", "JavaScript", "TypeScript", "SQL", "Verilog", "Ruby"] },
+    { "category": "Frameworks", "items": ["React", "Next.js", "Vue", "PyTorch", "TensorFlow", "Spring Boot", "FastAPI", "Three.js"] },
+    { "category": "Infrastructure", "items": ["Docker", "Kubernetes", "AWS", "Jenkins", "Kafka", "RabbitMQ", "GitHub Actions"] },
+    { "category": "Concepts", "items": ["Distributed Systems", "Microservices", "REST/gRPC", "CI/CD", "OOP", "Agile", "System Design"] }
+  ],
+  "summary": null,
+  "experience": [
+    {
+      "company": "AMD",
+      "location": "Toronto, ON",
+      "roles": [
+        { "title": "Software Engineer (Contract)", "dates": "May 2025 -- Aug 2025" },
+        { "title": "Software Engineer Intern (PEY)", "dates": "May 2024 -- May 2025" }
+      ],
+      "bullets": [
+        "Retained as a contractor following a high-performance 12-month internship to lead critical frontend infrastructure projects.",
+        "Architected a regression management platform serving 2,000+ engineers, utilizing Vue and PostgreSQL to visualize testing bottlenecks and improve silicon validation efficiency.",
+        "Engineered an AI-driven debugging pipeline that reduced validation time by autonomously identifying edge cases.",
+        "Implemented JWT authentication across Python and JavaScript services, reducing unauthorized access incidents by 90%.",
+        "Designed and deployed a CI/CD pipeline using Jenkins, reducing deployment latency by 30%.",
+        "Developed CLI automation tools in Python and Ruby (OOP), saving 20+ hours per week of manual engineering effort."
+      ]
+    },
+    {
+      "company": "Accelbyte Inc.",
+      "location": "Toronto, ON",
+      "roles": [{ "title": "Software Engineer Intern", "dates": "Jan 2023 -- Aug 2023" }],
+      "bullets": [
+        "Engineered scalable Golang microservices utilizing gRPC for low-latency inter-service communication.",
+        "Refactored global authentication middleware in Golang, enabling seamless cross-service sessions.",
+        "Maintained high-availability Java REST APIs for partner integrations, ensuring 99.9% system uptime.",
+        "Automated release workflows in Jenkins, reducing manual release overhead by 2 hours per cycle."
+      ]
+    },
+    {
+      "company": "University of Toronto",
+      "location": "Toronto, ON",
+      "roles": [{ "title": "Silicon Design Engineer Intern", "dates": "May 2023 -- Aug 2023" }],
+      "bullets": [
+        "Optimized FPGA-Python communication pipelines using Verilog and Vivado, reducing data transfer latency by 80%.",
+        "Implemented I2C and SPI protocols to enhance data throughput by 50% in hardware simulations."
+      ]
+    },
+    {
+      "company": "F8th Inc.",
+      "location": "Toronto, ON",
+      "roles": [{ "title": "Machine Learning Engineer Intern", "dates": "May 2022 -- Aug 2022" }],
+      "bullets": [
+        "Built an active learning model in Python, Scikit-learn, and TensorFlow, achieving 98% accuracy.",
+        "Designed automated ETL pipelines using MySQL to accelerate model retraining and feature extraction."
+      ]
+    },
+    {
+      "company": "National Bank of Canada",
+      "location": "Toronto, ON",
+      "roles": [{ "title": "Junior Analyst Intern", "dates": "Oct 2019 -- Jan 2020" }],
+      "bullets": [
+        "Processed high-volume client trading instructions with 100% accuracy, ensuring regulatory compliance.",
+        "Audited senior analyst instructions to mitigate financial risk, identifying key data discrepancies.",
+        "Collaborated with cross-functional teams to streamline request handling and improve operational efficiency."
+      ]
+    }
+  ],
+  "projects": [
+    {
+      "name": "AutoCareer - Job Application Automation",
+      "tech": ["Next.js", "Python", "FastAPI", "PostgreSQL", "Claude AI", "Docker"],
+      "bullets": [
+        "Built a self-hosted platform that automates job discovery, AI-powered scoring, and resume tailoring using Claude.",
+        "Architected a microservices backend with FastAPI, PostgreSQL, and Playwright for headless browser scraping.",
+        "Developed AI agents for job extraction, relevance scoring (0-100), and structured resume customization per application.",
+        "Implemented real-time scan progress tracking with background tasks and polling-based frontend updates."
+      ]
+    },
+    {
+      "name": "AI Outfit Simulator",
+      "tech": ["Next.js", "Python", "Gemini AI", "Three.js", "Stable Diffusion"],
+      "bullets": [
+        "Developed a virtual try-on platform that simulates clothing on 3D human models using Diffusion Models and Three.js.",
+        "Implemented semantic search using CLIP embeddings to retrieve visually similar items from user wardrobes.",
+        "Integrated Gemini AI to analyze user feedback loops, fine-tuning prompt templates for adaptive style personalization."
+      ]
+    },
+    {
+      "name": "Obsidian AI Note Plugin",
+      "tech": ["TypeScript", "Google Gemini API", "Obsidian"],
+      "bullets": [
+        "Engineered a multi-modal plugin processing audio and PDFs via asynchronous Gemini API polling.",
+        "Designed robust error handling with graceful degradation to manage large file uploads (up to 2GB).",
+        "Implemented an intelligent summarization engine that converts unstructured audio transcripts into structured, analytical notes."
+      ]
+    },
+    {
+      "name": "Interactive Networking Lab",
+      "tech": ["Next.js", "Docker", "Python", "C", "Systems Programming"],
+      "bullets": [
+        "Built an educational platform allowing users to compile C code and visualize network packet transmission in real-time.",
+        "Orchestrated isolated lab environments using Docker Swarm to ensure secure and reproducible grading simulations.",
+        "Developed backend verification scripts in Python to validate custom network protocols."
+      ]
+    },
+    {
+      "name": "Pedestrian Detection System",
+      "tech": ["Python", "PyTorch", "Computer Vision"],
+      "bullets": [
+        "Trained a Mask R-CNN (ResNet-50) model in PyTorch for real-time pedestrian detection.",
+        "Optimized model performance via data augmentation techniques, achieving 93.3% detection accuracy."
+      ]
+    },
+    {
+      "name": "NLP Tech News Aggregator",
+      "tech": ["Python", "OpenAI API", "Automation"],
+      "bullets": [
+        "Engineered an automated news summarization pipeline using Python and GPT models, achieving 95% test coverage.",
+        "Implemented automated email delivery services to distribute concise technical summaries to subscribers."
+      ]
+    },
+    {
+      "name": "Network Communication Systems",
+      "tech": ["C", "TCP/UDP", "Socket Programming"],
+      "bullets": [
+        "Implemented a robust file transfer system using UDP and a multi-user chat server using TCP in C.",
+        "Handled concurrency and packet loss scenarios manually to ensure data integrity across unstable networks."
+      ]
+    },
+    {
+      "name": "High-Performance GIS Engine",
+      "tech": ["C++", "Algorithms", "Multithreading"],
+      "bullets": [
+        "Architected a GIS pathfinding engine in C++ utilizing A* algorithms and OpenStreetMap data.",
+        "Optimized query performance by 40% through multithreading and efficient data structure design."
+      ]
+    },
+    {
+      "name": "Full Stack Social Platform",
+      "tech": ["React", "Node.js", "MongoDB", "JWT"],
+      "bullets": [
+        "Developed a secure social media application featuring RESTful APIs and JWT-based authentication.",
+        "Designed a scalable database schema in MongoDB to handle complex user relationships and content feeds."
+      ]
+    },
+    {
+      "name": "Blockchain Transaction Prototype",
+      "tech": ["Rust", "Solidity", "Distributed Systems"],
+      "bullets": [
+        "Developed a high-throughput blockchain prototype in Rust, implementing core consensus mechanisms.",
+        "Wrote Solidity smart contracts to handle secure transaction logic and automated verification."
+      ]
+    },
+    {
+      "name": "LLVM Compiler Contribution",
+      "tech": ["C++", "Compiler Design", "Open Source"],
+      "bullets": [
+        "Contributed to the LLVM codebase by refactoring compiler optimization passes for modern C++ compliance.",
+        "Improved code maintainability and performance of specific backend instruction generation modules."
+      ]
+    },
+    {
+      "name": "CNN Handwriting Recognition",
+      "tech": ["Python", "TensorFlow", "FastAPI"],
+      "bullets": [
+        "Trained a CNN model on the Kuzushiji-MNIST dataset to recognize ancient Japanese characters.",
+        "Deployed the model via a high-performance FastAPI backend for real-time inference."
+      ]
+    },
+    {
+      "name": "Personal Portfolio Infrastructure",
+      "tech": ["React", "CI/CD", "Cloud Hosting"],
+      "bullets": [
+        "Built a responsive portfolio with React, implementing CI/CD pipelines for automated deployment on Netlify."
+      ]
+    },
+    {
+      "name": "Geometry Wars Game Engine",
+      "tech": ["Java", "JavaFX", "OOP", "Physics Engine"],
+      "bullets": [
+        "Developed a physics-based game engine in Java, implementing collision detection and object pooling patterns."
+      ]
+    }
+  ]
+}
