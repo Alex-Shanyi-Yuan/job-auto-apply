@@ -421,7 +421,8 @@ backend/services/resume-tailor/
     ├── test_resume_renderer.py      # LaTeX escaping, template rendering, ResumeContent validation
     ├── test_site_plugins.py         # Scraper site plugins
     ├── test_startup.py              # Startup health checks
-    └── test_tailor_and_robustness.py # Tailor agent budget/header guardrails, timeouts, job URL uniqueness
+    ├── test_tailor_and_robustness.py # Tailor agent budget/header guardrails, timeouts, job URL uniqueness
+    └── test_e2e_apply.py            # TRUE end-to-end apply test (skipped unless RUN_E2E=true; see below)
 ```
 
 **Run tests from the repo-root virtualenv** (there is no per-service venv) with `TESTING=true`:
@@ -446,6 +447,31 @@ def test_scoring_agent_stub_mode():
     assert 0 <= result.score <= 100
     assert result.reasoning is not None
 ```
+
+## End-to-End Test (real services, real LLM)
+
+`tests/test_e2e_apply.py` drives the deployed stack over HTTP with a hardcoded
+job URL: `POST /apply` → scraper fetch → Claude parse → Claude tailor →
+LaTeX render → pdflatex → `GET /jobs/{id}/pdf`. It asserts the job reaches the
+`active` success status, the parsed company/title match, requirements were
+extracted, and the downloaded file is a real PDF.
+
+It is **skipped by default** (needs Docker, a `CLAUDE_CODE_OAUTH_TOKEN`,
+internet access, and takes minutes — the tailoring call alone can run 10–20
+minutes through the `claude` CLI):
+
+```bash
+# 1. Start the stack (token must be set in the environment or .env)
+docker compose --profile postgres up -d --build
+
+# 2. Run only the E2E test
+cd backend/services/resume-tailor && \
+  RUN_E2E=true TESTING=true ../../../.venv/bin/python -m pytest tests/test_e2e_apply.py -q
+```
+
+Config knobs: `E2E_BASE_URL` (default `http://localhost:8000`),
+`E2E_TIMEOUT_SECONDS` (default 1800). Re-running is safe: `/apply` reuses the
+existing job row for a known URL, so the unique `job.url` index is not violated.
 
 ## Future: Integration Tests
 
