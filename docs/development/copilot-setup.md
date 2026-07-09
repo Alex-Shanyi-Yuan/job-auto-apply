@@ -37,14 +37,12 @@ The AutoCareer repository includes instruction files that provide context and gu
 
 ### Other AI Instruction Files
 
-**`PROJECT_README.md`**
-- High-level product overview
-- User-facing feature descriptions
-- Not AI-specific, but provides context
+**`.github/copilot-instructions.md`**
+- Thin pointer at CLAUDE.md for GitHub Copilot, plus a few essentials
+- **Never add project knowledge there** — CLAUDE.md is the single canonical instruction file
 
-**`.cursorrules` or `.aichat` (If Added)**
-- Editor-specific AI configurations
-- May include additional coding style preferences
+**`.claude/settings.json` + `.claude/hooks/check-docs-sync.sh`**
+- Project-level Claude Code config: a `Stop` hook that reminds the session to update docs when code changed but no `docs/`/CLAUDE.md files did (part of the Knowledge Retention Policy)
 
 ## How GitHub Copilot CLI Uses CLAUDE.md
 
@@ -81,13 +79,7 @@ When working in `claude.ai/code`:
 
 ### When to Update CLAUDE.md
 
-Update CLAUDE.md when you make changes to:
-
-- **Architecture:** New services, ports, or technology stack
-- **Development Workflow:** New commands, scripts, or tools
-- **Code Patterns:** Established conventions (e.g., new error handling pattern)
-- **Environment Variables:** New configuration options
-- **File Structure:** Major reorganization of directories
+The authoritative rules live in CLAUDE.md itself — see its **"Knowledge Retention Policy"** and **"Documentation Map"** sections at the top of the file. In short: documentation updates ship in the same commit as the code change, and the map tells you exactly which doc corresponds to which code area. This section is intentionally not duplicated here.
 
 ### How to Update CLAUDE.md
 
@@ -231,32 +223,7 @@ This allows testing agent logic without API costs. See [Testing Strategies](./te
 
 ## Maintaining CLAUDE.md Over Time
 
-### Regular Reviews
-
-**After major changes:**
-- New service added → Update architecture table
-- New environment variable → Update env vars section
-- New development command → Update commands section
-
-**Monthly check:**
-- Verify all commands still work
-- Ensure file paths are accurate
-- Update any changed patterns
-
-### Version Control
-
-Always commit CLAUDE.md changes with descriptive messages:
-```bash
-git add CLAUDE.md
-git commit -m "docs: update CLAUDE.md with new analytics service"
-```
-
-### Sync with Documentation
-
-Keep CLAUDE.md aligned with:
-- `docs/development/README.md` — Development workflows
-- `docs/deployment/` — Production setup (if different)
-- `README.md` — High-level architecture
+Maintenance rules are defined in CLAUDE.md's **"Knowledge Retention Policy"** — update CLAUDE.md and the mapped `docs/` files in the same commit as the code change, and grep `docs/` for terms your change made obsolete. Enforcement: the `Stop` hook in `.claude/settings.json` reminds any Claude Code session that changed code without touching docs.
 
 ## AI Assistant Limitations
 

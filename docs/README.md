@@ -50,4 +50,10 @@ Welcome to AutoCareer - a self-hosted job application automation platform using 
 
 ---
 
+## 🧠 Maintaining These Docs
+
+The documentation-update policy and the code-to-doc map live in [CLAUDE.md](../CLAUDE.md) ("Knowledge Retention Policy" and "Documentation Map"). AI sessions apply it automatically — doc updates ship in the same commit as the code change; humans should follow the same map.
+
+---
+
 **Project Home**: [GitHub Repository](https://github.com/Alex-Shanyi-Yuan/job-auto-apply)

@@ -2,6 +2,47 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Knowledge Retention Policy (IMPORTANT)
+
+Documentation updates are part of every change, not a follow-up task. Before finishing
+any task that changes code, config, or workflow:
+
+1. Check the Documentation Map below and update every listed doc whose subject you
+   changed — in the same commit as the code change.
+2. Update this file (CLAUDE.md) when a change affects: services/ports/architecture,
+   development commands, code patterns, environment variables, key source files,
+   the job status lifecycle, or testing behavior.
+3. Grep `docs/` for terms your change made obsolete (renamed files, removed env vars,
+   changed defaults) and fix stale mentions.
+4. If nothing needs updating, state that explicitly in your summary — decide, don't skip.
+
+Conventions:
+
+- CLAUDE.md is the concise index; `docs/` holds the detail. Never duplicate long
+  explanations here.
+- `.github/copilot-instructions.md` is a thin pointer at this file — never add project
+  knowledge there.
+- Design docs are point-in-time records: new ones go in `docs/superpowers/plans/` or
+  `specs/` with a date prefix; superseded material moves to `docs/enhancements/archive/`.
+  Active docs (`features/`, `architecture/`, `api/`, `getting-started/`, `development/`)
+  must always describe the current system.
+
+## Documentation Map
+
+| If you change...                                                       | Also update...                                                                                              |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| API endpoints (`server.py`)                                             | `docs/api/resume-tailor-api.md`; `frontend/lib/api.ts` client                                                |
+| Scraper service (`backend/services/job-scraper/`)                       | `docs/api/scraper-api.md`                                                                                    |
+| Agents / LLM engine (`core/agents.py`, `core/llm_providers.py`)         | "AI Agents & LLM Engine" here; `docs/features/job-discovery.md` or `resume-tailoring.md`                     |
+| Resume pipeline (`resume_model.py`, `resume_renderer.py`, `data/*.j2`)  | "Resume Generation Pipeline" here; `docs/features/resume-tailoring.md`                                       |
+| Job discovery / scoring / suggestions scan                              | `docs/features/job-discovery.md`; "Suggestions Scan" here                                                    |
+| DB models, migrations, job status lifecycle (`database.py`)             | `docs/development/database-migrations.md`; `docs/features/application-tracking.md`; lifecycle diagram here   |
+| Environment variables                                                   | "Environment Variables" here; `docs/getting-started/environment-setup.md`                                    |
+| Docker services, ports, deployment (`docker-compose.yml`)               | Architecture table here; `docs/getting-started/deployment.md` + `quickstart.md`                              |
+| Test setup / stub mode                                                  | "Testing Gotchas" here; `docs/development/testing.md`                                                        |
+| Frontend pages or patterns (`frontend/`)                                | "Frontend Patterns" here; `docs/architecture/data-flow.md` if a flow changes                                 |
+| Any new feature                                                         | New file in `docs/features/`; nav link in `docs/README.md`; move roadmap entry in `docs/enhancements/`       |
+
 ## Development Commands
 
 ```bash
