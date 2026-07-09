@@ -240,11 +240,8 @@ This structure follows a **Monorepo pattern** orchestrated by Docker Compose.
 ├── .gitignore
 ├── docker-compose.yml         # Orchestrates all 4 services
 ├── package.json               # Root scripts
-├── README.md                  # System architecture specification
-├── PROJECT_README.md          # Setup and usage instructions
-├── FolderStruct.md            # Directory structure documentation
-├── CLAUDE.md                  # AI assistant instructions
-├── TODO.todo                  # Development tasks
+├── README.md                  # Project landing page (links into docs/)
+├── CLAUDE.md                  # AI assistant instructions (canonical; includes the Documentation Map)
 │
 ├── /docs                      # Documentation
 │   ├── /architecture          # Architecture docs (this file)

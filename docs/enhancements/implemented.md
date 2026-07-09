@@ -1,8 +1,10 @@
 # Implemented Enhancements
 
-This document tracks features from the HARNESS_ENHANCEMENTS design that have been completed or partially implemented.
+This document tracks features from the original harness-enhancements design ([archive/harness-inspiration.md](./archive/harness-inspiration.md)) that have been completed or partially implemented.
 
-**Last Updated:** 2026-04-03
+**Last Updated:** 2026-07-08
+
+> **Historical note (2026-07-08):** The per-feature write-ups below are point-in-time records written before the Claude LLM migration. Where they describe `GeminiProvider` as the production provider or `ClaudeProvider` as pending, that is outdated — the default engine is now `ClaudeAgentProvider` (via `claude-agent-sdk` on a Claude subscription), with Gemini as legacy fallback. See [CLAUDE.md](../../CLAUDE.md) "AI Agents & LLM Engine" for the current state. The Summary table below is kept current.
 
 ---
 
@@ -330,7 +332,7 @@ All plugin routing tests pass with deterministic behavior. URL resolution correc
 | Feature | Status | What's Done | What's Pending |
 |---------|--------|-------------|----------------|
 | **0. Frontend API Client** | ✅ Complete | All endpoints wrapped, used by all pages | None |
-| **3. Multi-Provider LLM** | 🟡 Partial | Provider abstraction, Gemini+Stub implementations, agent integration | Claude/OpenAI providers, model registry, per-agent selection, failover, settings UI |
+| **3. Multi-Provider LLM** | 🟡 Partial | Provider abstraction; `ClaudeAgentProvider` (default), `GeminiProvider` (fallback), `StubProvider`; agent integration | OpenAI provider, model registry, per-agent selection, failover, settings UI |
 | **5. Scraper Plugins** | 🟡 Partial | Plugin framework, 6 domain packages, routing, URL resolution, tests | Specialized extractors, error telemetry, additional sites (Lever, Workday, Spotify, Microsoft, Uber) |
 
 ---
@@ -338,7 +340,7 @@ All plugin routing tests pass with deterministic behavior. URL resolution correc
 ## Next Steps
 
 ### To Complete Feature 3 (Multi-Provider LLM)
-1. Implement `ClaudeProvider` using `anthropic` SDK
+1. ~~Implement Claude provider~~ ✅ Done — `ClaudeAgentProvider` via `claude-agent-sdk` is now the default
 2. Implement `OpenAIProvider` using `openai` SDK
 3. Create `MODEL_REGISTRY` with pricing data
 4. Add per-agent model selection settings

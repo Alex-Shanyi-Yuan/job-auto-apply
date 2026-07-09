@@ -1,6 +1,6 @@
 # Enhancement Roadmap
 
-This document outlines the prioritized enhancement features for AutoCareer, extracted from the full HARNESS_ENHANCEMENTS.md design document. Features are organized by priority tier.
+This document outlines the prioritized enhancement features for AutoCareer, extracted from the full original design document ([archive/harness-inspiration.md](./archive/harness-inspiration.md)). Features are organized by priority tier.
 
 ---
 
@@ -87,7 +87,7 @@ The 4 AI agents (`agents.py`) execute with no validation layer between prompt an
 **Problem Statement:**
 
 `server.py` startup creates database tables and runs migrations silently with no health verification. Critical failures only surface at runtime:
-- Missing Gemini API key → server starts fine but all agent calls fail with `401 Unauthorized`
+- Missing LLM credentials (`CLAUDE_CODE_OAUTH_TOKEN`, or `GOOGLE_API_KEY` on the Gemini fallback) → server starts fine but all agent calls fail with auth errors
 - Missing `pdflatex` binary → server starts but PDF compilation fails on first apply
 - Database connection issues → silent failure until first query
 - Scraper service unreachable → no warning until scrape attempt
@@ -100,11 +100,11 @@ Users have no visibility into what dependencies are ready or misconfigured.
   - `database_connection` — verify DB is reachable
   - `migrations_applied` — ensure schema is current
   - `master_resume_exists` — validate resume template file
-  - `gemini_api_key` — check API credentials are configured
+  - `claude_auth_configured` — check LLM credentials are configured (implemented as the Claude OAuth-token check; also fails fast if `ANTHROPIC_API_KEY` is present)
   - `scraper_reachable` — ping scraper service health
   - `pdflatex_available` — verify LaTeX toolchain
 - **Health Endpoint:** Add `GET /health` that returns startup check results
-- **Fast-Fail:** If critical config missing (e.g., `GOOGLE_API_KEY`), disable agent endpoints with `503 Service Unavailable` and descriptive error
+- **Fast-Fail:** If critical config missing (e.g., `CLAUDE_CODE_OAUTH_TOKEN`), disable agent endpoints with `503 Service Unavailable` and descriptive error
 - **Frontend Integration:** Call `/health` on app load, show warning banner for any unavailable services
 
 **Expected Impact:**
@@ -154,11 +154,11 @@ These features significantly improve observability, safety, and cost management.
 
 **Problem Statement:**
 
-There is no tracking of LLM token consumption per job or per scan. Users have no visibility into API costs. Each Gemini call returns usage metadata (`response.usage_metadata.prompt_token_count`, `response.usage_metadata.candidates_token_count`) that is currently discarded. With 100+ jobs scored per scan, API costs can accumulate unexpectedly. Users cannot make informed decisions about model selection or source configuration without cost data.
+There is no tracking of LLM token consumption per job or per scan. The default Claude engine runs on a subscription (no per-token billing), so the value here is usage visibility and plan-limit awareness rather than dollar cost; the Gemini fallback is billed per token and does benefit from cost tracking. Usage metadata returned by providers is currently discarded. Users cannot make informed decisions about model selection or source configuration without usage data.
 
 **What to Build:**
 
-- **Token Capture:** Update `llm_client.py` to extract and return `TokenUsage` dataclass alongside content
+- **Token Capture:** Update the providers in `core/llm_providers.py` to extract and return a `TokenUsage` dataclass alongside content
 - **Database Schema:** Add migration to include `input_tokens`, `output_tokens`, `estimated_cost_usd` columns on `Job` table
 - **Cost Calculation:** Implement pricing lookup table mapping models to per-million-token costs
 - **Accumulation:** Track token usage across all 3 agent calls in `process_application()` and save totals
@@ -170,7 +170,7 @@ There is no tracking of LLM token consumption per job or per scan. Users have no
 - Surfaces real API spend so users can tune model choices (connects to Feature 3: multi-provider)
 - Enables cost-per-application metric ("this resume tailoring cost $0.04")
 - Enables per-scan cost visibility ("found 47 jobs, scored 23, cost $0.12 total")
-- No architecture change needed — Gemini already returns usage metadata
+- No architecture change needed — providers already receive usage metadata (Claude via `ResultMessage`, Gemini via `response.usage_metadata`)
 
 ---
 
@@ -262,8 +262,16 @@ Add dry-run mode for safe testing and cost control.
 
 ---
 
+## Ideas / Backlog
+
+Unscoped ideas not yet designed:
+
+- Auto-apply to jobs by driving application forms with Claude Code's Chrome MCP (browser automation), instead of stopping at tailored-PDF generation
+
+---
+
 ## Notes
 
 - See [implemented.md](./implemented.md) for features already completed or partially implemented
 - See [archive/harness-inspiration.md](./archive/harness-inspiration.md) for the complete original design document with all 11 features
-- Cross-reference with project TODOs in `/TODO.todo` for related work items
+- New ideas and work items belong in this file (Ideas / Backlog above) — the old root `TODO.todo` has been folded in here
